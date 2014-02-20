@@ -61,6 +61,13 @@ typedef enum sensor_stats_type {
 	YYYY,
 } sensor_stats_type_t;
 
+#ifdef CONFIG_MACH_OPPO
+typedef enum sensor_stats_type {
+	YRGB,
+	YYYY,
+} sensor_stats_type_t;
+#endif
+
 enum flash_type {
 	LED_FLASH = 1,
 	STROBE_FLASH,
@@ -493,9 +500,9 @@ enum msm_actuator_cfg_type_t {
 	CFG_SET_ACTUATOR_INFO,
 	CFG_SET_DEFAULT_FOCUS,
 	CFG_MOVE_FOCUS,
-	CFG_SET_POSITION,
+#ifdef CONFIG_MACH_OPPO
 	CFG_ACTUATOR_POWERDOWN,
-	CFG_ACTUATOR_POWERUP,
+#endif
 };
 
 enum actuator_type {
@@ -644,8 +651,12 @@ enum msm_camera_led_config_t {
 
 struct msm_camera_led_cfg_t {
 	enum msm_camera_led_config_t cfgtype;
+#ifdef CONFIG_MACH_OPPO
+	uint32_t led_current;
+#else
 	uint32_t torch_current;
 	uint32_t flash_current[2];
+#endif
 };
 
 /* sensor init structures and enums */
