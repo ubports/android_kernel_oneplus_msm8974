@@ -149,7 +149,7 @@ struct mdp3_dma_source {
 	int height;
 	int x;
 	int y;
-	dma_addr_t buf;
+	void *buf;
 	int stride;
 	int vsync_count;
 	int vporch;

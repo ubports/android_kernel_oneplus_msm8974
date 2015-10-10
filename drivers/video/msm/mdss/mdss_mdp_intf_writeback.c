@@ -50,7 +50,7 @@ struct mdss_mdp_writeback_ctx {
 	struct mdss_mdp_format_params *dst_fmt;
 	u16 width;
 	u16 height;
-	struct mdss_rect dst_rect;
+	struct mdss_mdp_img_rect dst_rect;
 
 	u8 rot90;
 	u32 bwc_mode;
@@ -60,9 +60,6 @@ struct mdss_mdp_writeback_ctx {
 
 	spinlock_t wb_lock;
 	struct list_head vsync_handlers;
-
-	ktime_t start_time;
-	ktime_t end_time;
 };
 
 static struct mdss_mdp_writeback_ctx wb_ctx_list[MDSS_MDP_MAX_WRITEBACK] = {
@@ -114,7 +111,7 @@ static int mdss_mdp_writeback_addr_setup(struct mdss_mdp_writeback_ctx *ctx,
 		return -EINVAL;
 	data = *in_data;
 
-	pr_debug("wb_num=%d addr=0x%pa\n", ctx->wb_num, &data.p[0].addr);
+	pr_debug("wb_num=%d addr=0x%x\n", ctx->wb_num, data.p[0].addr);
 
 	if (ctx->bwc_mode)
 		data.bwc_enabled = 1;
@@ -274,7 +271,6 @@ static int mdss_mdp_writeback_prepare_rot(struct mdss_mdp_ctl *ctl, void *arg)
 	struct mdss_mdp_writeback_ctx *ctx;
 	struct mdss_mdp_writeback_arg *wb_args;
 	struct mdss_mdp_rotator_session *rot;
-	struct mdss_data_type *mdata;
 	struct mdss_mdp_format_params *fmt;
 	u32 format;
 
@@ -288,11 +284,6 @@ static int mdss_mdp_writeback_prepare_rot(struct mdss_mdp_ctl *ctl, void *arg)
 	rot = (struct mdss_mdp_rotator_session *) wb_args->priv_data;
 	if (!rot) {
 		pr_err("unable to retrieve rot session ctl=%d\n", ctl->num);
-		return -ENODEV;
-	}
-	mdata = ctl->mdata;
-	if (!mdata) {
-		pr_err("no mdata attached to ctl=%d", ctl->num);
 		return -ENODEV;
 	}
 	pr_debug("rot setup wb_num=%d\n", ctx->wb_num);
@@ -442,7 +433,6 @@ static int mdss_mdp_wb_wait4comp(struct mdss_mdp_ctl *ctl, void *arg)
 {
 	struct mdss_mdp_writeback_ctx *ctx;
 	int rc = 0;
-	u64 rot_time;
 
 	ctx = (struct mdss_mdp_writeback_ctx *) ctl->priv_data;
 	if (!ctx) {
@@ -464,27 +454,13 @@ static int mdss_mdp_wb_wait4comp(struct mdss_mdp_ctl *ctl, void *arg)
 		WARN(1, "writeback kickoff timed out (%d) ctl=%d\n",
 						rc, ctl->num);
 	} else {
-		ctx->end_time = ktime_get();
 		mdss_mdp_ctl_notify(ctl, MDP_NOTIFY_FRAME_DONE);
 		rc = 0;
 	}
 
-	mdss_iommu_ctrl(0);
-	mdss_bus_bandwidth_ctrl(false);
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false); /* clock off */
 
-	/* Set flag to release Controller Bandwidth */
-	ctl->perf_release_ctl_bw = true;
-
 	ctx->comp_cnt--;
-
-	if (!rc) {
-		rot_time = (u64)ktime_to_us(ctx->end_time) -
-				(u64)ktime_to_us(ctx->start_time);
-		pr_debug("ctx%d type:%d xin_id:%d intf_num:%d took %llu microsecs\n",
-			ctx->wb_num, ctx->type, ctx->xin_id,
-				ctx->intf_num, rot_time);
-	}
 
 	return rc;
 }
@@ -493,7 +469,7 @@ static int mdss_mdp_writeback_display(struct mdss_mdp_ctl *ctl, void *arg)
 {
 	struct mdss_mdp_writeback_ctx *ctx;
 	struct mdss_mdp_writeback_arg *wb_args;
-	u32 flush_bits, val, bit_off, reg_off;
+	u32 flush_bits, val, off;
 	int ret;
 
 	if (!ctl || !ctl->mdata)
@@ -514,16 +490,11 @@ static int mdss_mdp_writeback_display(struct mdss_mdp_ctl *ctl, void *arg)
 			ctx->wr_lim = ctl->mdata->rotator_ot_limit;
 		else
 			ctx->wr_lim = MDSS_DEFAULT_OT_SETTING;
-
-		reg_off = (ctx->xin_id / 4) * 4;
-		bit_off = (ctx->xin_id % 4) * 8;
-
-		val = readl_relaxed(ctl->mdata->vbif_base + VBIF_WR_LIM_CONF +
-			reg_off);
-		val &= ~(0xFF << bit_off);
-		val |= (ctx->wr_lim) << bit_off;
-		writel_relaxed(val, ctl->mdata->vbif_base + VBIF_WR_LIM_CONF +
-			reg_off);
+		off = (ctx->xin_id % 4) * 8;
+		val = readl_relaxed(ctl->mdata->vbif_base + VBIF_WR_LIM_CONF);
+		val &= ~(0xFF << off);
+		val |= (ctx->wr_lim) << off;
+		writel_relaxed(val, ctl->mdata->vbif_base + VBIF_WR_LIM_CONF);
 	}
 
 	wb_args = (struct mdss_mdp_writeback_arg *) arg;
@@ -546,19 +517,9 @@ static int mdss_mdp_writeback_display(struct mdss_mdp_ctl *ctl, void *arg)
 	INIT_COMPLETION(ctx->wb_comp);
 	mdss_mdp_irq_enable(ctx->intr_type, ctx->intf_num);
 
-	ret = mdss_iommu_ctrl(1);
-	if (IS_ERR_VALUE(ret)) {
-		pr_err("IOMMU attach failed\n");
-		return ret;
-	}
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
-	mdss_bus_bandwidth_ctrl(true);
-	ctx->start_time = ktime_get();
 	mdss_mdp_ctl_write(ctl, MDSS_MDP_REG_CTL_START, 1);
 	wmb();
-
-	pr_debug("ctx%d type:%d xin_id:%d intf_num:%d start\n",
-		ctx->wb_num, ctx->type, ctx->xin_id, ctx->intf_num);
 
 	ctx->comp_cnt++;
 
@@ -621,5 +582,5 @@ int mdss_mdp_writeback_display_commit(struct mdss_mdp_ctl *ctl, void *arg)
 			ctl->mixer_right->params_changed++;
 	}
 
-	return mdss_mdp_display_commit(ctl, arg, NULL);
+	return mdss_mdp_display_commit(ctl, arg);
 }

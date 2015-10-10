@@ -365,8 +365,8 @@ static struct mdss_mdp_wb_data *get_local_node(struct mdss_mdp_wb *wb,
 	if (!list_empty(&wb->register_queue)) {
 		list_for_each_entry(node, &wb->register_queue, registered_entry)
 		if (node->buf_info.iova == data->iova) {
-			pr_debug("found node iova=%pa addr=%pa\n",
-				 &data->iova, &node->buf_data.p[0].addr);
+			pr_debug("found node iova=%x addr=%x\n",
+				 data->iova, node->buf_data.p[0].addr);
 			return node;
 		}
 	}
@@ -391,8 +391,7 @@ static struct mdss_mdp_wb_data *get_local_node(struct mdss_mdp_wb *wb,
 		return NULL;
 	}
 
-	pr_debug("register node iova=0x%pa addr=0x%pa\n", &data->iova,
-								&buf->addr);
+	pr_debug("register node iova=0x%x addr=0x%x\n", data->iova, buf->addr);
 
 	return node;
 }
@@ -404,16 +403,15 @@ static struct mdss_mdp_wb_data *get_user_node(struct msm_fb_data_type *mfd,
 	struct mdss_mdp_wb *wb = mfd_to_wb(mfd);
 	struct mdss_mdp_wb_data *node;
 	struct mdss_mdp_img_data *buf;
-	u32 flags = 0;
 	int ret;
 
 	if (!list_empty(&wb->register_queue)) {
 		list_for_each_entry(node, &wb->register_queue, registered_entry)
 			if ((node->buf_info.memory_id == data->memory_id) &&
 				    (node->buf_info.offset == data->offset)) {
-				pr_debug("found node fd=%x off=%x addr=%pa\n",
+				pr_debug("found node fd=%x off=%x addr=%x\n",
 						data->memory_id, data->offset,
-						&node->buf_data.p[0].addr);
+						node->buf_data.p[0].addr);
 				return node;
 			}
 	}
@@ -425,45 +423,28 @@ static struct mdss_mdp_wb_data *get_user_node(struct msm_fb_data_type *mfd,
 	}
 
 	node->user_alloc = true;
+	node->buf_data.num_planes = 1;
+	buf = &node->buf_data.p[0];
 	if (wb->is_secure)
-		flags |= MDP_SECURE_OVERLAY_SESSION;
-
-	ret = mdss_mdp_data_get(&node->buf_data, data, 1, flags);
+		buf->flags |= MDP_SECURE_OVERLAY_SESSION;
+	ret = mdss_mdp_get_img(data, buf);
 	if (IS_ERR_VALUE(ret)) {
 		pr_err("error getting buffer info\n");
 		goto register_fail;
 	}
-
-	ret = mdss_iommu_ctrl(1);
-	if (IS_ERR_VALUE(ret)) {
-		pr_err("IOMMU attach failed\n");
-		goto fail_freebuf;
-	}
-
-	ret = mdss_mdp_data_map(&node->buf_data);
-	if (IS_ERR_VALUE(ret)) {
-		pr_err("error mapping buffer\n");
-		mdss_iommu_ctrl(0);
-		goto fail_freebuf;
-	}
-
-	mdss_iommu_ctrl(0);
-
 	memcpy(&node->buf_info, data, sizeof(*data));
 
 	ret = mdss_mdp_wb_register_node(wb, node);
 	if (IS_ERR_VALUE(ret)) {
 		pr_err("error registering wb node\n");
-		goto fail_freebuf;
+		goto register_fail;
 	}
 
-	buf = &node->buf_data.p[0];
-	pr_debug("register node mem_id=%d offset=%u addr=0x%pa len=%u\n",
-		 data->memory_id, data->offset, &buf->addr, buf->len);
+	pr_debug("register node mem_id=%d offset=%u addr=0x%x len=%d\n",
+		 data->memory_id, data->offset, buf->addr, buf->len);
 
 	return node;
-fail_freebuf:
-	mdss_mdp_data_free(&node->buf_data);
+
 register_fail:
 	kfree(node);
 	return NULL;
@@ -475,12 +456,12 @@ static void mdss_mdp_wb_free_node(struct mdss_mdp_wb_data *node)
 
 	if (node->user_alloc) {
 		buf = &node->buf_data.p[0];
-		pr_debug("free user node mem_id=%d offset=%u addr=0x%pa\n",
+		pr_debug("free user node mem_id=%d offset=%u addr=0x%x\n",
 				node->buf_info.memory_id,
 				node->buf_info.offset,
-				&buf->addr);
+				buf->addr);
 
-		mdss_mdp_data_free(&node->buf_data);
+		mdss_mdp_put_img(&node->buf_data.p[0]);
 		node->user_alloc = false;
 	}
 }
@@ -490,6 +471,7 @@ static int mdss_mdp_wb_queue(struct msm_fb_data_type *mfd,
 {
 	struct mdss_mdp_wb *wb = mfd_to_wb(mfd);
 	struct mdss_mdp_wb_data *node = NULL;
+	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
 	int ret = 0;
 
 	if (!wb) {
@@ -498,6 +480,14 @@ static int mdss_mdp_wb_queue(struct msm_fb_data_type *mfd,
 	}
 
 	pr_debug("fb%d queue\n", wb->fb_ndx);
+
+	if (!mfd->panel_info->cont_splash_enabled) {
+		ret  = mdss_iommu_attach(mdp5_data->mdata);
+		if (ret) {
+			pr_err("mdss iommu attach failed rc=%d", ret);
+			return ret;
+		}
+	}
 
 	mutex_lock(&wb->lock);
 	if (local)
@@ -585,7 +575,7 @@ static int mdss_mdp_wb_dequeue(struct msm_fb_data_type *mfd,
 		memcpy(data, &node->buf_info, sizeof(*data));
 
 		buf = &node->buf_data.p[0];
-		pr_debug("found node addr=%pa len=%d\n", &buf->addr, buf->len);
+		pr_debug("found node addr=%x len=%d\n", buf->addr, buf->len);
 	} else {
 		pr_debug("node is NULL, wait for next\n");
 		ret = -ENOBUFS;
@@ -752,10 +742,6 @@ int mdss_mdp_wb_ioctl_handler(struct msm_fb_data_type *mfd, u32 cmd,
 		}
 		break;
 	case MSMFB_WRITEBACK_TERMINATE:
-		if (IS_ERR_VALUE(ret)) {
-			pr_err("IOMMU attach failed\n");
-			return ret;
-		}
 		ret = mdss_mdp_wb_terminate(mfd);
 		break;
 	case MSMFB_WRITEBACK_SET_MIRRORING_HINT:
@@ -869,25 +855,19 @@ int msm_fb_writeback_set_secure(struct fb_info *info, int enable)
 EXPORT_SYMBOL(msm_fb_writeback_set_secure);
 
 /**
- * msm_fb_writeback_iommu_ref() - Add/Remove vote on MDSS IOMMU being attached.
- * @enable - true adds vote on MDSS IOMMU, false removes the vote.
+ * msm_fb_writeback_iommu_ref() - Power ON/OFF mdp clock
+ * @enable - true/false to Power ON/OFF mdp clock
  *
- * Call to vote on MDSS IOMMU being enabled. To ensure buffers are properly
- * mapped to IOMMU context bank.
+ * Call to enable mdp clock at start of mdp_mmap/mdp_munmap API and
+ * to disable mdp clock at end of these API's to ensure iommu is in
+ * proper state while driver map/un-map any buffers.
  */
 int msm_fb_writeback_iommu_ref(struct fb_info *info, int enable)
 {
-	int ret;
-
-	if (enable) {
-		ret = mdss_iommu_ctrl(1);
-		if (IS_ERR_VALUE(ret)) {
-			pr_err("IOMMU attach failed\n");
-			return ret;
-		}
-	} else {
-		mdss_iommu_ctrl(0);
-	}
+	if (enable)
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
+	else
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
 
 	return 0;
 }

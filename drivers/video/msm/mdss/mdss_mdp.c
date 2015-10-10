@@ -56,9 +56,7 @@
 #include "mdss_debug.h"
 
 #define CREATE_TRACE_POINTS
-#include <trace/mdss_mdp_trace.h>
-
-#define AUTOSUSPEND_TIMEOUT_MS	200
+#include "mdss_mdp_trace.h"
 
 struct mdss_data_type *mdss_res;
 
@@ -86,7 +84,6 @@ static DEFINE_SPINLOCK(mdp_lock);
 static DEFINE_MUTEX(mdp_clk_lock);
 static DEFINE_MUTEX(bus_bw_lock);
 static DEFINE_MUTEX(mdp_iommu_lock);
-static DEFINE_MUTEX(mdp_fs_idle_pc_lock);
 
 static struct mdss_panel_intf pan_types[] = {
 	{"dsi", MDSS_PANEL_INTF_DSI},
@@ -123,30 +120,6 @@ struct mdss_hw mdss_mdp_hw = {
 	.hw_ndx = MDSS_HW_MDP,
 	.ptr = NULL,
 	.irq_handler = mdss_mdp_isr,
-};
-
-#define MDP_REG_BUS_VECTOR_ENTRY(ab_val, ib_val)		\
-	{						\
-		.src = MSM_BUS_MASTER_SPDM,		\
-		.dst = MSM_BUS_SLAVE_IMEM_CFG,		\
-		.ab = (ab_val),				\
-		.ib = (ib_val),				\
-	}
-
-#define SZ_37_5M (37500000 * 8)
-#define SZ_75M (75000000 * 8)
-
-static struct msm_bus_vectors mdp_reg_bus_vectors[] = {
-	MDP_REG_BUS_VECTOR_ENTRY(0, 0),
-	MDP_REG_BUS_VECTOR_ENTRY(0, SZ_37_5M),
-	MDP_REG_BUS_VECTOR_ENTRY(0, SZ_75M),
-};
-static struct msm_bus_paths mdp_reg_bus_usecases[ARRAY_SIZE(
-		mdp_reg_bus_vectors)];
-static struct msm_bus_scale_pdata mdp_reg_bus_scale_table = {
-	.usecase = mdp_reg_bus_usecases,
-	.num_usecases = ARRAY_SIZE(mdp_reg_bus_usecases),
-	.name = "mdss_reg",
 };
 
 static DEFINE_SPINLOCK(mdss_lock);
@@ -344,13 +317,10 @@ EXPORT_SYMBOL(mdss_disable_irq_nosync);
 
 static int mdss_mdp_bus_scale_register(struct mdss_data_type *mdata)
 {
-	struct msm_bus_scale_pdata *reg_bus_pdata;
-	int i;
-
 	if (!mdata->bus_hdl) {
 		mdata->bus_hdl =
 			msm_bus_scale_register_client(mdata->bus_scale_table);
-		if (!mdata->bus_hdl) {
+		if (IS_ERR_VALUE(mdata->bus_hdl)) {
 			pr_err("bus_client register failed\n");
 			return -EINVAL;
 		}
@@ -358,25 +328,7 @@ static int mdss_mdp_bus_scale_register(struct mdss_data_type *mdata)
 		pr_debug("register bus_hdl=%x\n", mdata->bus_hdl);
 	}
 
-	if (!mdata->reg_bus_hdl) {
-		reg_bus_pdata = &mdp_reg_bus_scale_table;
-		for (i = 0; i < reg_bus_pdata->num_usecases; i++) {
-			mdp_reg_bus_usecases[i].num_paths = 1;
-			mdp_reg_bus_usecases[i].vectors =
-				&mdp_reg_bus_vectors[i];
-		}
-
-		mdata->reg_bus_hdl =
-			msm_bus_scale_register_client(reg_bus_pdata);
-		if (!mdata->reg_bus_hdl) {
-			/* Continue without reg_bus scaling */
-			pr_warn("reg_bus_client register failed\n");
-		} else
-			pr_debug("register reg_bus_hdl=%x\n",
-					mdata->reg_bus_hdl);
-	}
-
-	return mdss_bus_scale_set_quota(MDSS_HW_MDP, AB_QUOTA, IB_QUOTA);
+	return mdss_mdp_bus_scale_set_quota(AB_QUOTA, IB_QUOTA);
 }
 
 static void mdss_mdp_bus_scale_unregister(struct mdss_data_type *mdata)
@@ -385,13 +337,6 @@ static void mdss_mdp_bus_scale_unregister(struct mdss_data_type *mdata)
 
 	if (mdata->bus_hdl)
 		msm_bus_scale_unregister_client(mdata->bus_hdl);
-
-	pr_debug("unregister reg_bus_hdl=%x\n", mdata->reg_bus_hdl);
-
-	if (mdata->reg_bus_hdl) {
-		msm_bus_scale_unregister_client(mdata->reg_bus_hdl);
-		mdata->reg_bus_hdl = 0;
-	}
 }
 
 int mdss_mdp_bus_scale_set_quota(u64 ab_quota, u64 ib_quota)
@@ -448,29 +393,6 @@ int mdss_mdp_bus_scale_set_quota(u64 ab_quota, u64 ib_quota)
 
 	return msm_bus_scale_client_update_request(mdss_res->bus_hdl,
 		new_uc_idx);
-}
-
-int mdss_bus_scale_set_quota(int client, u64 ab_quota, u64 ib_quota)
-{
-	int rc = 0;
-	int i;
-	u64 total_ab = 0;
-	u64 total_ib = 0;
-
-	mutex_lock(&bus_bw_lock);
-
-	mdss_res->ab[client] = ab_quota;
-	mdss_res->ib[client] = ib_quota;
-	for (i = 0; i < MDSS_MAX_HW_BLK; i++) {
-		total_ab += mdss_res->ab[i];
-		total_ib = max(total_ib, mdss_res->ib[i]);
-	}
-
-	rc = mdss_mdp_bus_scale_set_quota(total_ab, total_ib);
-
-	mutex_unlock(&bus_bw_lock);
-
-	return rc;
 }
 
 static inline u32 mdss_mdp_irq_mask(u32 intr_type, u32 intf_num)
@@ -663,7 +585,7 @@ void mdss_mdp_set_clk_rate(unsigned long rate)
 	struct clk *clk = mdss_mdp_get_clk(MDSS_CLK_MDP_SRC);
 	unsigned long min_clk_rate;
 
-	min_clk_rate = max(rate, mdata->perf_tune.min_mdp_clk);
+	min_clk_rate = max(rate, mdata->min_mdp_clk);
 
 	if (clk) {
 		mutex_lock(&mdp_clk_lock);
@@ -697,75 +619,6 @@ unsigned long mdss_mdp_get_clk_rate(u32 clk_idx)
 	return clk_rate;
 }
 
-int mdss_iommu_ctrl(int enable)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	int rc = 0;
-
-	mutex_lock(&mdp_iommu_lock);
-	pr_debug("%pS: enable %d mdata->iommu_ref_cnt %d\n",
-		__builtin_return_address(0), enable, mdata->iommu_ref_cnt);
-
-	if (enable) {
-		/*
-		 * delay iommu attach until continous splash screen has
-		 * finished handoff, as it may still be working with phys addr
-		 */
-		if (!mdata->iommu_attached && !mdata->handoff_pending)
-			rc = mdss_iommu_attach(mdata);
-		mdata->iommu_ref_cnt++;
-	} else {
-		if (mdata->iommu_ref_cnt) {
-			mdata->iommu_ref_cnt--;
-			if (mdata->iommu_ref_cnt == 0)
-				rc = mdss_iommu_dettach(mdata);
-		} else {
-			pr_err("unbalanced iommu ref\n");
-		}
-	}
-	mutex_unlock(&mdp_iommu_lock);
-
-	if (IS_ERR_VALUE(rc))
-		return rc;
-	else
-		return mdata->iommu_ref_cnt;
-}
-
-/**
- * mdss_mdp_idle_pc_restore() - Restore MDSS settings when exiting idle pc
- *
- * MDSS GDSC can be voted off during idle-screen usecase for MIPI DSI command
- * mode displays, referred to as MDSS idle power collapse. Upon subsequent
- * frame update, MDSS GDSC needs to turned back on and hw state needs to be
- * restored.
- */
-static int mdss_mdp_idle_pc_restore(void)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	int rc = 0;
-
-	mutex_lock(&mdp_fs_idle_pc_lock);
-	if (!mdata->idle_pc) {
-		pr_debug("no idle pc, no need to restore\n");
-		goto end;
-	}
-
-	pr_debug("called from %pS\n", __builtin_return_address(0));
-	rc = mdss_iommu_ctrl(1);
-	if (IS_ERR_VALUE(rc)) {
-		pr_err("mdss iommu attach failed rc=%d\n", rc);
-		goto end;
-	}
-	mdss_hw_init(mdata);
-	mdss_iommu_ctrl(0);
-	mdss_mdp_ctl_restore();
-	mdata->idle_pc = false;
-
-end:
-	mutex_unlock(&mdp_fs_idle_pc_lock);
-	return rc;
-}
-
 /**
  * mdss_bus_bandwidth_ctrl() -- place bus bandwidth request
  * @enable:	value of enable or disable
@@ -775,16 +628,27 @@ end:
  * Bus bandwidth is required by mdp.For dsi, it only requires to send
  * dcs coammnd. It returns error if bandwidth request fails.
  */
-void mdss_bus_bandwidth_ctrl(int enable)
+int mdss_bus_bandwidth_ctrl(int enable)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	static int bus_bw_cnt;
 	int changed = 0;
+	int rc = 0;
 
 	mutex_lock(&bus_bw_lock);
 	if (enable) {
-		if (bus_bw_cnt == 0)
+		if (bus_bw_cnt == 0) {
 			changed++;
+			if (!mdata->handoff_pending) {
+				rc = mdss_iommu_attach(mdata);
+				if (rc) {
+					pr_err("iommu attach failed rc=%d\n",
+									rc);
+					goto end;
+				}
+			}
+		}
+
 		bus_bw_cnt++;
 	} else {
 		if (bus_bw_cnt) {
@@ -803,8 +667,8 @@ void mdss_bus_bandwidth_ctrl(int enable)
 		if (!enable) {
 			msm_bus_scale_client_update_request(
 				mdata->bus_hdl, 0);
-			pm_runtime_mark_last_busy(&mdata->pdev->dev);
-			pm_runtime_put_autosuspend(&mdata->pdev->dev);
+			mdss_iommu_dettach(mdata);
+			pm_runtime_put(&mdata->pdev->dev);
 		} else {
 			pm_runtime_get_sync(&mdata->pdev->dev);
 			msm_bus_scale_client_update_request(
@@ -812,7 +676,9 @@ void mdss_bus_bandwidth_ctrl(int enable)
 		}
 	}
 
+end:
 	mutex_unlock(&bus_bw_lock);
+	return rc;
 }
 EXPORT_SYMBOL(mdss_bus_bandwidth_ctrl);
 
@@ -820,7 +686,7 @@ void mdss_mdp_clk_ctrl(int enable, int isr)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	static int mdp_clk_cnt;
-	int changed = 0;
+	int changed = 0, rc;
 
 	mutex_lock(&mdp_clk_lock);
 	if (enable) {
@@ -842,14 +708,10 @@ void mdss_mdp_clk_ctrl(int enable, int isr)
 			__func__, mdp_clk_cnt, changed, enable);
 
 	if (changed) {
-		/*
-		 * todo: may need to restore mdss registers if exiting
-		 * idle power collapse.
-		 */
+		mdata->clk_ena = enable;
 		if (enable)
 			pm_runtime_get_sync(&mdata->pdev->dev);
 
-		mdata->clk_ena = enable;
 		mdss_mdp_clk_update(MDSS_CLK_AHB, enable);
 		mdss_mdp_clk_update(MDSS_CLK_AXI, enable);
 		mdss_mdp_clk_update(MDSS_CLK_MDP_CORE, enable);
@@ -857,16 +719,15 @@ void mdss_mdp_clk_ctrl(int enable, int isr)
 		if (mdata->vsync_ena)
 			mdss_mdp_clk_update(MDSS_CLK_MDP_VSYNC, enable);
 
-		if (!enable) {
-			pm_runtime_mark_last_busy(&mdata->pdev->dev);
-			pm_runtime_put_autosuspend(&mdata->pdev->dev);
-		}
+		rc = mdss_bus_bandwidth_ctrl(enable);
+		if (rc)
+			pr_err("bus bandwidth control failed rc=%d", rc);
+
+		if (!enable)
+			pm_runtime_put(&mdata->pdev->dev);
 	}
 
 	mutex_unlock(&mdp_clk_lock);
-
-	if (enable && changed)
-		mdss_mdp_idle_pc_restore();
 }
 
 static inline int mdss_mdp_irq_clk_register(struct mdss_data_type *mdata,
@@ -951,6 +812,7 @@ int mdss_iommu_attach(struct mdss_data_type *mdata)
 	struct mdss_iommu_map_type *iomap;
 	int i, rc = 0;
 
+	mutex_lock(&mdp_iommu_lock);
 	MDSS_XLOG(mdata->iommu_attached);
 
 	if (mdata->iommu_attached) {
@@ -981,6 +843,8 @@ int mdss_iommu_attach(struct mdss_data_type *mdata)
 
 	mdata->iommu_attached = true;
 end:
+	mutex_unlock(&mdp_iommu_lock);
+
 	return rc;
 }
 
@@ -990,10 +854,12 @@ int mdss_iommu_dettach(struct mdss_data_type *mdata)
 	struct mdss_iommu_map_type *iomap;
 	int i;
 
+	mutex_lock(&mdp_iommu_lock);
 	MDSS_XLOG(mdata->iommu_attached);
 
 	if (!mdata->iommu_attached) {
 		pr_debug("mdp iommu already dettached\n");
+		mutex_unlock(&mdp_iommu_lock);
 		return 0;
 	}
 
@@ -1010,6 +876,7 @@ int mdss_iommu_dettach(struct mdss_data_type *mdata)
 	}
 
 	mdata->iommu_attached = false;
+	mutex_unlock(&mdp_iommu_lock);
 
 	return 0;
 }
@@ -1137,20 +1004,13 @@ static int mdss_mdp_debug_init(struct mdss_data_type *mdata)
 	return 0;
 }
 
-/**
- * mdss_hw_init() - Initialize MDSS target specific register settings
- * @mdata: MDP private data
- *
- * Initialize basic MDSS hardware settings based on the board specific
- * parameters. This function does not explicitly turn on the MDP clocks
- * and so it must be called with the MDP clocks already enabled.
- */
 int mdss_hw_init(struct mdss_data_type *mdata)
 {
 	int i, j;
 	char *offset;
 	struct mdss_mdp_pipe *vig;
 
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
 	mdata->mdp_rev = MDSS_MDP_REG_READ(MDSS_MDP_REG_HW_VERSION);
 	pr_info_once("MDP Rev=%x\n", mdata->mdp_rev);
 
@@ -1188,6 +1048,7 @@ int mdss_hw_init(struct mdss_data_type *mdata)
 
 	mdata->nmax_concurrent_ad_hw = (mdata->mdp_rev <= MDSS_MDP_HW_REV_102) ?
 									1 : 2;
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
 	pr_debug("MDP hw init done\n");
 
 	return 0;
@@ -1339,7 +1200,6 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, mdata);
 	mdss_res = mdata;
 	mutex_init(&mdata->reg_lock);
-	atomic_set(&mdata->active_intf_cnt, 0);
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mdp_phys");
 	if (!res) {
@@ -1416,9 +1276,6 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 		goto probe_done;
 	}
 
-	pm_runtime_set_autosuspend_delay(&pdev->dev, AUTOSUSPEND_TIMEOUT_MS);
-	if (mdata->idle_pc_enabled)
-		pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 	if (!pm_runtime_enabled(&pdev->dev))
@@ -2394,9 +2251,6 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 		"qcom,mdss-has-wfd-blk");
 	mdata->has_no_lut_read = of_property_read_bool(pdev->dev.of_node,
 		"qcom,mdss-no-lut-read");
-	mdata->idle_pc_enabled = of_property_read_bool(pdev->dev.of_node,
-		 "qcom,mdss-idle-power-collapse-enabled");
-
 	prop = of_find_property(pdev->dev.of_node, "batfet-supply", NULL);
 	mdata->batfet_required = prop ? true : false;
 	rc = of_property_read_u32(pdev->dev.of_node,
@@ -2666,8 +2520,6 @@ vreg_set_voltage_fail:
 
 void mdss_mdp_batfet_ctrl(struct mdss_data_type *mdata, int enable)
 {
-	int ret;
-
 	if (!mdata->batfet_required)
 		return;
 
@@ -2687,65 +2539,74 @@ void mdss_mdp_batfet_ctrl(struct mdss_data_type *mdata, int enable)
 		}
 	}
 
-	if (enable) {
-		ret = regulator_enable(mdata->batfet);
-		if (ret)
-			pr_err("regulator_enable failed\n");
-	} else {
+	if (enable)
+		regulator_enable(mdata->batfet);
+	else
 		regulator_disable(mdata->batfet);
-	}
 }
 
-/**
- * mdss_mdp_footswitch_ctrl() - Disable/enable MDSS GDSC and CX/Batfet rails
- * @mdata: MDP private data
- * @on: 1 to turn on footswitch, 0 to turn off footswitch
- *
- * When no active references to the MDP device node and it's child nodes are
- * held, MDSS GDSC can be turned off. However, any any panels are still
- * active (but likely in an idle state), the vote for the CX and the batfet
- * rails should not be released.
- */
 static void mdss_mdp_footswitch_ctrl(struct mdss_data_type *mdata, int on)
 {
-	int ret;
-	int active_cnt = 0;
-
 	if (!mdata->fs)
 		return;
 
 	if (on) {
+		pr_debug("Enable MDP FS\n");
 		if (!mdata->fs_ena) {
-			pr_debug("Enable MDP FS\n");
-			ret = regulator_enable(mdata->fs);
-			if (ret)
-				pr_warn("Footswitch failed to enable\n");
-			if (!mdata->idle_pc) {
+			regulator_enable(mdata->fs);
+			if (!mdata->ulps) {
 				mdss_mdp_cx_ctrl(mdata, true);
 				mdss_mdp_batfet_ctrl(mdata, true);
 			}
 		}
 		mdata->fs_ena = true;
 	} else {
+		pr_debug("Disable MDP FS\n");
+		mdss_iommu_dettach(mdata);
 		if (mdata->fs_ena) {
-			pr_debug("Disable MDP FS\n");
-			active_cnt = atomic_read(&mdata->active_intf_cnt);
-			if (active_cnt != 0) {
-				/*
-				 * Turning off GDSC while overlays are still
-				 * active.
-				 */
-				mdata->idle_pc = true;
-				pr_debug("idle pc. active overlays=%d\n",
-						active_cnt);
-			} else {
+			regulator_disable(mdata->fs);
+			if (!mdata->ulps) {
 				mdss_mdp_cx_ctrl(mdata, false);
 				mdss_mdp_batfet_ctrl(mdata, false);
 			}
-			regulator_disable(mdata->fs);
 		}
 		mdata->fs_ena = false;
 	}
+}
+
+/**
+ * mdss_mdp_footswitch_ctrl_ulps() - MDSS GDSC control with ULPS feature
+ * @on: 1 to turn on footswitch, 0 to turn off footswitch
+ * @dev: framebuffer device node
+ *
+ * MDSS GDSC can be voted off during idle-screen usecase for MIPI DSI command
+ * mode displays with Ultra-Low Power State (ULPS) feature enabled. Upon
+ * subsequent frame update, MDSS GDSC needs to turned back on and hw state
+ * needs to be restored. It returns error if footswitch control API
+ * fails.
+ */
+int mdss_mdp_footswitch_ctrl_ulps(int on, struct device *dev)
+{
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	int rc = 0;
+
+	pr_debug("called on=%d\n", on);
+	if (on) {
+		pm_runtime_get_sync(dev);
+		rc = mdss_iommu_attach(mdata);
+		if (rc) {
+			pr_err("mdss iommu attach failed rc=%d\n", rc);
+			goto end;
+		}
+		mdss_hw_init(mdata);
+		mdata->ulps = false;
+	} else {
+		mdata->ulps = true;
+		pm_runtime_put_sync(dev);
+	}
+
+end:
+	return rc;
 }
 
 static inline int mdss_mdp_suspend_sub(struct mdss_data_type *mdata)
@@ -2792,15 +2653,6 @@ static int mdss_mdp_pm_resume(struct device *dev)
 
 	dev_dbg(dev, "display pm resume\n");
 
-	/*
-	 * It is possible that the runtime status of the mdp device may
-	 * have been active when the system was suspended. Reset the runtime
-	 * status to suspended state after a complete system resume.
-	 */
-	pm_runtime_disable(dev);
-	pm_runtime_set_suspended(dev);
-	pm_runtime_enable(dev);
-
 	return mdss_mdp_resume_sub(mdata);
 }
 #endif
@@ -2842,12 +2694,8 @@ static int mdss_mdp_runtime_resume(struct device *dev)
 	if (!mdata)
 		return -ENODEV;
 
-	dev_dbg(dev, "pm_runtime: resuming. active overlay cnt=%d\n",
-		atomic_read(&mdata->active_intf_cnt));
-
-	/* do not resume panels when coming out of idle power collapse */
-	if (!mdata->idle_pc)
-		device_for_each_child(dev, &device_on, mdss_fb_suspres_panel);
+	dev_dbg(dev, "pm_runtime: resuming...\n");
+	device_for_each_child(dev, &device_on, mdss_fb_suspres_panel);
 	mdss_mdp_footswitch_ctrl(mdata, true);
 
 	return 0;
@@ -2870,18 +2718,14 @@ static int mdss_mdp_runtime_suspend(struct device *dev)
 	bool device_on = false;
 	if (!mdata)
 		return -ENODEV;
-	dev_dbg(dev, "pm_runtime: suspending. active overlay cnt=%d\n",
-		atomic_read(&mdata->active_intf_cnt));
+	dev_dbg(dev, "pm_runtime: suspending...\n");
 
 	if (mdata->clk_ena) {
 		pr_err("MDP suspend failed\n");
 		return -EBUSY;
 	}
-
+	device_for_each_child(dev, &device_on, mdss_fb_suspres_panel);
 	mdss_mdp_footswitch_ctrl(mdata, false);
-	/* do not suspend panels when going in to idle power collapse */
-	if (!mdata->idle_pc)
-		device_for_each_child(dev, &device_on, mdss_fb_suspres_panel);
 
 	return 0;
 }

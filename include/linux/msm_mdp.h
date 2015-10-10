@@ -81,8 +81,6 @@
 #define MSMFB_ASYNC_BLIT              _IOW(MSMFB_IOCTL_MAGIC, 168, unsigned int)
 #define MSMFB_OVERLAY_PREPARE		_IOWR(MSMFB_IOCTL_MAGIC, 169, \
 						struct mdp_overlay_list)
-#define MSMFB_LPM_ENABLE       _IOWR(MSMFB_IOCTL_MAGIC, 170, unsigned int)
-
 #define FB_TYPE_3D_PANEL 0x10101010
 #define MDP_IMGTYPE2_START 0x10000
 #define MSMFB_DRIVER_VERSION	0xF9E8D701
@@ -557,23 +555,6 @@ struct mdp_scale_data {
 };
 
 /**
- * enum mdp_overlay_pipe_type - Different pipe type set by userspace
- *
- * @PIPE_TYPE_AUTO:    Not specified, pipe will be selected according to flags.
- * @PIPE_TYPE_VIG:     VIG pipe.
- * @PIPE_TYPE_RGB:     RGB pipe.
- * @PIPE_TYPE_DMA:     DMA pipe.
- * @PIPE_TYPE_MAX:     Used to track maximum number of pipe type.
- */
-enum mdp_overlay_pipe_type {
-        PIPE_TYPE_AUTO = 0,
-        PIPE_TYPE_VIG,
-        PIPE_TYPE_RGB,
-        PIPE_TYPE_DMA,
-        PIPE_TYPE_MAX,
-};
-
-/**
  * struct mdp_overlay - overlay surface structure
  * @src:	Source image information (width, height, format).
  * @src_rect:	Source crop rectangle, portion of image that will be fetched.
@@ -595,7 +576,6 @@ enum mdp_overlay_pipe_type {
  *		The color should be in same format as the source image format.
  * @flags:	This is used to customize operation of overlay. See MDP flags
  *		for more information.
- * @pipe_type:  Used to specify the type of overlay pipe.
  * @user_data:	DEPRECATED* Used to store user application specific information.
  * @bg_color:	Solid color used to fill the overlay surface when no source
  *		buffer is provided.
@@ -628,7 +608,6 @@ struct mdp_overlay {
 	uint32_t blend_op;
 	uint32_t transp_mask;
 	uint32_t flags;
-	uint32_t pipe_type;
 	uint32_t id;
 	uint32_t user_data[6];
 	uint32_t bg_color;
@@ -842,15 +821,6 @@ struct mdp_calib_dcm_state {
 	uint32_t dcm_state;
 };
 
-struct mdp_pp_init_data {
-	uint32_t init_request;
-};
-
-enum {
-	MDP_PP_DISABLE,
-	MDP_PP_ENABLE,
-};
-
 enum {
 	DCM_UNINIT,
 	DCM_UNBLANK,
@@ -964,7 +934,6 @@ enum {
 	mdp_op_calib_mode,
 	mdp_op_calib_buffer,
 	mdp_op_calib_dcm_state,
-	mdp_op_pp_init_cfg,
 	mdp_op_max,
 };
 
@@ -997,7 +966,6 @@ struct msmfb_mdp_pp {
 		struct mdss_ad_input ad_input;
 		struct mdp_calib_config_buffer calib_buffer;
 		struct mdp_calib_dcm_state calib_dcm;
-		struct mdp_pp_init_data init_data;
 	} data;
 };
 
@@ -1011,7 +979,6 @@ enum {
 	metadata_op_wb_secure,
 	metadata_op_get_caps,
 	metadata_op_crc,
-	metadata_op_get_ion_fd,
 	metadata_op_max
 };
 
@@ -1045,7 +1012,6 @@ struct msmfb_metadata {
 		uint32_t video_info_code;
 		struct mdss_hw_caps caps;
 		uint8_t secure_en;
-		int fbmem_ionfd;
 	} data;
 };
 
@@ -1074,8 +1040,7 @@ struct mdp_display_commit {
 	uint32_t flags;
 	uint32_t wait_for_finish;
 	struct fb_var_screeninfo var;
-	struct mdp_rect l_roi;
-	struct mdp_rect r_roi;
+	struct mdp_rect roi;
 };
 
 /**
@@ -1133,9 +1098,6 @@ enum {
 	MDP_WRITEBACK_MIRROR_PAUSE,
 	MDP_WRITEBACK_MIRROR_RESUME,
 };
-
-/* let users know that we have the new struct formats */
-#define DUAL_DSI
 
 #ifdef __KERNEL__
 int msm_fb_get_iommu_domain(struct fb_info *info, int domain);

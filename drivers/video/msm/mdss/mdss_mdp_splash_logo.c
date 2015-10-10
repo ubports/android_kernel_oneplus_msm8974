@@ -56,8 +56,8 @@ static int mdss_mdp_splash_alloc_memory(struct msm_fb_data_type *mfd,
 
 	rc = ion_map_iommu(mdata->iclient, sinfo->ion_handle,
 			mdss_get_iommu_domain(MDSS_IOMMU_DOMAIN_UNSECURE),
-			0, SZ_4K, 0, &sinfo->iova,
-				&buf_size, 0, 0);
+			0, SZ_4K, 0, (dma_addr_t *)&sinfo->iova,
+				(unsigned long *)&buf_size, 0, 0);
 	if (rc) {
 		pr_err("ion memory map failed\n");
 		goto imap_err;
@@ -109,7 +109,7 @@ static int mdss_mdp_splash_iommu_attach(struct msm_fb_data_type *mfd)
 {
 	struct iommu_domain *domain;
 	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
-	int rc, ret;
+	int rc;
 
 	/*
 	 * iommu dynamic attach for following conditions.
@@ -139,9 +139,9 @@ static int mdss_mdp_splash_iommu_attach(struct msm_fb_data_type *mfd)
 	if (rc) {
 		pr_debug("iommu memory mapping failed rc=%d\n", rc);
 	} else {
-		ret = mdss_iommu_ctrl(1);
-		if (IS_ERR_VALUE(ret)) {
-			pr_err("mdss iommu attach failed\n");
+		rc = mdss_iommu_attach(mdss_res);
+		if (rc) {
+			pr_debug("mdss iommu attach failed\n");
 			iommu_unmap(domain, mdp5_data->splash_mem_addr,
 						mdp5_data->splash_mem_size);
 		} else {
@@ -167,8 +167,6 @@ static void mdss_mdp_splash_unmap_splash_mem(struct msm_fb_data_type *mfd)
 
 		iommu_unmap(domain, mdp5_data->splash_mem_addr,
 						mdp5_data->splash_mem_size);
-		mdss_iommu_ctrl(0);
-
 		mfd->splash_info.iommu_dynamic_attached = false;
 	}
 }
@@ -214,7 +212,7 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 		 * out on the dsi lanes.
 		 */
 		if (mdp5_data->handoff && ctl && ctl->is_video_mode) {
-			rc = mdss_mdp_display_commit(ctl, NULL, NULL);
+			rc = mdss_mdp_display_commit(ctl, NULL);
 			if (!IS_ERR_VALUE(rc)) {
 				mdss_mdp_display_wait4comp(ctl);
 			} else {
@@ -248,6 +246,12 @@ int mdss_mdp_splash_cleanup(struct msm_fb_data_type *mfd,
 	}
 
 	mdss_mdp_footswitch_ctrl_splash(0);
+	if (!is_mdss_iommu_attached()) {
+		rc = mdss_iommu_attach(mdss_res);
+		if (rc)
+			pr_err("iommu attach failed rc=%d\n", rc);
+	}
+
 end:
 	return rc;
 }
@@ -281,8 +285,8 @@ static struct mdss_mdp_pipe *mdss_mdp_splash_get_pipe(
 }
 
 static int mdss_mdp_splash_kickoff(struct msm_fb_data_type *mfd,
-				struct mdss_rect *src_rect,
-				struct mdss_rect *dest_rect)
+				struct mdss_mdp_img_rect *src_rect,
+				struct mdss_mdp_img_rect *dest_rect)
 {
 	struct mdss_mdp_pipe *pipe;
 	struct fb_info *fbi;
@@ -395,7 +399,7 @@ static int mdss_mdp_display_splash_image(struct msm_fb_data_type *mfd)
 	struct fb_info *fbi;
 	uint32_t image_len = SPLASH_IMAGE_WIDTH * SPLASH_IMAGE_HEIGHT
 						* SPLASH_IMAGE_BPP;
-	struct mdss_rect src_rect, dest_rect;
+	struct mdss_mdp_img_rect src_rect, dest_rect;
 	struct msm_fb_splash_info *sinfo;
 
 	if (!mfd || !mfd->fbi) {
