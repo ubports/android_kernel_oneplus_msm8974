@@ -132,6 +132,13 @@ int snd_jack_new(struct snd_card *card, const char *id, int type,
 
 	jack->type = type;
 
+#ifdef CONFIG_SWITCH_H2W
+       if (!jack->h2w) {
+               jack->h2w = switch_h2w_proble();
+               switch_h2w_report(jack->h2w, 0);
+       }
+#endif
+
 	for (i = 0; i < ARRAY_SIZE(jack_switch_types); i++)
 		if (type & (1 << i))
 			input_set_capability(jack->input_dev, EV_SW,
@@ -220,6 +227,11 @@ void snd_jack_report(struct snd_jack *jack, int status)
 
 	if (!jack)
 		return;
+
+#ifdef CONFIG_SWITCH_H2W
+       if (jack->type > 0 && jack->h2w)
+               switch_h2w_report(jack->h2w, status);
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(jack->key); i++) {
 		int testbit = SND_JACK_BTN_0 >> i;
