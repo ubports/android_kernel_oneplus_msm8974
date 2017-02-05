@@ -1137,7 +1137,7 @@ enum {
 };
 
 /* let users know that we have the new struct formats */
-//#define DUAL_DSI
+#define DUAL_DSI
 
 #ifdef __KERNEL__
 int msm_fb_get_iommu_domain(struct fb_info *info, int domain);
