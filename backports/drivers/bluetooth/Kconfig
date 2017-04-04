@@ -327,4 +327,16 @@ config BACKPORT_BT_WILINK
 	  Say Y here to compile support for Texas Instrument's WiLink7 driver
 	  into the kernel or say M to compile it as module (btwilink).
 
+config BACKPORT_BT_HCISMD
+	tristate "HCI SMD driver"
+	help
+	  Bluetooth HCI SMD driver
+	  This driver is required if you want to use Bluetooth devices with
+	  a shared memory interface.
+
+	  Say Y here to compile support for Bluetooth SMD devices into the
+	  kernel or say M to compile it as module (hci_smd).
+
+
+
 endmenu
