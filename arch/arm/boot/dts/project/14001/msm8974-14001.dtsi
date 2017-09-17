@@ -10,9 +10,14 @@
  * GNU General Public License for more details.
  */
 
+/include/ "msm8974-oppo-camera-sensor.dtsi"
+/include/ "msm8974-oppo-camera.dtsi"
+/include/ "msm8974-a0001-camera-sensor.dtsi"
+
 /include/ "msm8974-14001-panel.dtsi"
 /include/ "msm8974-14001-leds.dtsi"
-/include/ "msm8974-14001-camera.dtsi"
+
+
 /include/ "msm8974-14001-input.dtsi"
 /include/ "msm8974-14001-usb.dtsi"
 /include/ "msm8974-14001-misc.dtsi"

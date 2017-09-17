@@ -291,6 +291,7 @@ static int wfd_allocate_input_buffers(struct wfd_device *wfd_dev,
 	mutex_unlock(&inst->lock);
 
 	for (i = 0; i < VENC_INPUT_BUFFERS; ++i) {
+
 		mpair = kzalloc(sizeof(*mpair), GFP_KERNEL);
 		enc_mregion = kzalloc(sizeof(*enc_mregion), GFP_KERNEL);
 		mdp_mregion = kzalloc(sizeof(*enc_mregion), GFP_KERNEL);
@@ -316,9 +317,10 @@ static int wfd_allocate_input_buffers(struct wfd_device *wfd_dev,
 			rc = -EINVAL;
 			goto alloc_fail;
 		}
+
 		WFD_MSG_DBG("NOTE: enc paddr = [%p->%p], kvaddr = %p\n",
-				enc_mregion->paddr, (int8_t *)
-				enc_mregion->paddr + enc_mregion->size,
+ 				enc_mregion->paddr, (int8_t *)
+ 				enc_mregion->paddr + enc_mregion->size,
 				enc_mregion->kvaddr);
 
 		rc = v4l2_subdev_call(&wfd_dev->enc_sdev, core, ioctl,
