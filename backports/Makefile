@@ -54,3 +54,4 @@ obj-$(CONFIG_BACKPORT_MAC802154) += net/mac802154/
 
 # obj-$(CONFIG_BACKPORT_USB_WDM) += drivers/usb/class/
 # obj-$(CONFIG_BACKPORT_USB_USBNET) += drivers/net/usb/
+obj-$(CONFIG_ANBOX) += drivers/anbox/
