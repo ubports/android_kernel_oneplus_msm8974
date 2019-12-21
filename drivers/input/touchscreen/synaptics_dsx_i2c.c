@@ -955,11 +955,11 @@ error_set_vtg_vcc_ana:
 	return rc;
 }
 
-static unsigned char synaptics_rmi4_update_gesture2(unsigned char *gesture,
-		unsigned char *gestureext)
+static int synaptics_rmi4_update_gesture2(unsigned char *gesture,
+				      	unsigned char *gestureext)
 {
 	int i;
-	unsigned char keyvalue = 0;
+	int keyvalue = 0;
 	unsigned char gesturemode;
 	unsigned short points[16];
 
@@ -1073,7 +1073,7 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	struct synaptics_rmi4_f12_finger_data *finger_data;
 	unsigned char gesture[5];
 	unsigned char gestureext[25];
-	unsigned char keyvalue;
+	int keyvalue;
 	unsigned int  finger_info = 0;
 	u64 now = ktime_to_ms(ktime_get());
 
