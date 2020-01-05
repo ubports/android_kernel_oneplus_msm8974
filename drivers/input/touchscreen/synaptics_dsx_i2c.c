@@ -955,11 +955,11 @@ error_set_vtg_vcc_ana:
 	return rc;
 }
 
-static unsigned char synaptics_rmi4_update_gesture2(unsigned char *gesture,
+static int synaptics_rmi4_update_gesture2(unsigned char *gesture,
 		unsigned char *gestureext)
 {
 	int i;
-	unsigned char keyvalue = 0;
+	int keyvalue = 0;
 	unsigned char gesturemode;
 	unsigned short points[16];
 
@@ -1073,7 +1073,7 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	struct synaptics_rmi4_f12_finger_data *finger_data;
 	unsigned char gesture[5];
 	unsigned char gestureext[25];
-	unsigned char keyvalue;
+	int keyvalue;
 	unsigned int  finger_info = 0;
 	u64 now = ktime_to_ms(ktime_get());
 
@@ -1967,7 +1967,7 @@ static int synaptics_rmi4_set_input_dev(struct synaptics_rmi4_data *rmi4_data)
 
 	atomic_set(&rmi4_data->keypad_enable, 1);
 	atomic_set(&rmi4_data->syna_use_gesture, 1);
-	atomic_set(&rmi4_data->double_tap_enable, 1);
+	atomic_set(&rmi4_data->double_tap_enable, 0);
 	atomic_set(&rmi4_data->camera_enable, 0);
 	atomic_set(&rmi4_data->music_enable, 0);
 	atomic_set(&rmi4_data->flashlight_enable, 0);

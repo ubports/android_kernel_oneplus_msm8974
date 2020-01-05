@@ -473,15 +473,6 @@ struct input_keymap_entry {
 
 #define KEY_MICMUTE		248	/* Mute / unmute the microphone */
 
-#ifdef CONFIG_MACH_OPPO
-#define KEY_GESTURE_CIRCLE	250
-#define KEY_GESTURE_SWIPE_DOWN	251
-#define KEY_GESTURE_V		252
-#define KEY_GESTURE_LTR		253
-#define KEY_GESTURE_GTR		254
-#define KEY_DOUBLE_TAP		255
-#endif
-
 /* Code 255 is reserved for special needs of AT keyboard driver */
 
 #define BTN_MISC		0x100
@@ -717,6 +708,23 @@ struct input_keymap_entry {
 #define KEY_CAMERA_DOWN		0x218
 #define KEY_CAMERA_LEFT		0x219
 #define KEY_CAMERA_RIGHT	0x21a
+
+// from newer kernel
+#define KEY_ATTENDANT_ON	0x21b
+#define KEY_ATTENDANT_OFF	0x21c
+#define KEY_ATTENDANT_TOGGLE	0x21d	/* Attendant call on or off */
+#define KEY_LIGHTS_TOGGLE	0x21e	/* Reading light on or off */
+
+// map gesture key codes to codes that will be passed on by libinput
+// and might be handled by Mir as media keys (as in not changing the power state)
+#ifdef CONFIG_MACH_OPPO
+#define KEY_GESTURE_CIRCLE	KEY_CAMERA            // was 250
+#define KEY_GESTURE_SWIPE_DOWN	KEY_PLAYPAUSE         // was 251
+#define KEY_GESTURE_V		KEY_ATTENDANT_TOGGLE  // was 252
+#define KEY_GESTURE_LTR		KEY_PREVIOUSSONG      // was 253
+#define KEY_GESTURE_GTR		KEY_NEXTSONG          // was 254
+#define KEY_DOUBLE_TAP		KEY_POWER             // was 255
+#endif
 
 #define BTN_TRIGGER_HAPPY		0x2c0
 #define BTN_TRIGGER_HAPPY1		0x2c0
