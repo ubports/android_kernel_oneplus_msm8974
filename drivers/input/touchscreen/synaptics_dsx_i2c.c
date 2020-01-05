@@ -956,7 +956,7 @@ error_set_vtg_vcc_ana:
 }
 
 static int synaptics_rmi4_update_gesture2(unsigned char *gesture,
-				      	unsigned char *gestureext)
+		unsigned char *gestureext)
 {
 	int i;
 	int keyvalue = 0;
