@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015, 2019 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -39,7 +39,7 @@
 #include "wniApi.h"
 #include "sirApi.h"
 #include "aniGlobal.h"
-#include "wniCfgSta.h"
+#include "wniCfg.h"
 
 #include "utilsApi.h"
 #include "limTypes.h"
@@ -77,12 +77,16 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
     tpSirMacMgmtHdr    pHdr;
     tpDphHashNode      pStaDs;
     tLimMlmDisassocInd mlmDisassocInd;
-#ifdef WLAN_FEATURE_11W
-    tANI_U32            frameLen;
-#endif
+    tANI_U32            frame_len;
 
     pHdr = WDA_GET_RX_MAC_HEADER(pRxPacketInfo);
     pBody = WDA_GET_RX_MPDU_DATA(pRxPacketInfo);
+    frame_len = WDA_GET_RX_PAYLOAD_LEN(pRxPacketInfo);
+
+    if (frame_len < 2) {
+        limLog(pMac, LOGE, FL("frame len less than 2"));
+        return;
+    }
 
 
     if (limIsGroupAddr(pHdr->sa))
@@ -112,10 +116,9 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
         PELOGE(limLog(pMac, LOG1, FL("received an unprotected disassoc from AP"));)
         // If the frame received is unprotected, forward it to the supplicant to initiate
         // an SA query
-        frameLen = WDA_GET_RX_PAYLOAD_LEN(pRxPacketInfo);
         //send the unprotected frame indication to SME
         limSendSmeUnprotectedMgmtFrameInd( pMac, pHdr->fc.subType,
-                                           (tANI_U8*)pHdr, (frameLen + sizeof(tSirMacMgmtHdr)),
+                                           (tANI_U8*)pHdr, (frame_len + sizeof(tSirMacMgmtHdr)),
                                            psessionEntry->smeSessionId, psessionEntry);
         return;
     }
@@ -124,11 +127,12 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
     // Get reasonCode from Disassociation frame body
     reasonCode = sirReadU16(pBody);
 
-    PELOG2(limLog(pMac, LOGE,
-        FL("Received Disassoc frame for Addr: "MAC_ADDRESS_STR"(mlm state=%s, sme state=%d),"
+    limLog(pMac, LOGE,
+        FL("Received Disassoc frame for Addr: "MAC_ADDRESS_STR
+        "(mlm state=%s, sme state=%d),"
         "with reason code %d from "MAC_ADDRESS_STR), MAC_ADDR_ARRAY(pHdr->da),
-        limMlmStateStr(psessionEntry->limMlmState), psessionEntry->limSmeState, reasonCode,
-        MAC_ADDR_ARRAY(pHdr->sa));)
+        limMlmStateStr(psessionEntry->limMlmState), psessionEntry->limSmeState,
+        reasonCode, MAC_ADDR_ARRAY(pHdr->sa));
 
     /**
    * Extract 'associated' context for STA, if any.
@@ -268,19 +272,22 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
     }
 
     if ((pStaDs->mlmStaContext.mlmState == eLIM_MLM_WT_DEL_STA_RSP_STATE) ||
-        (pStaDs->mlmStaContext.mlmState == eLIM_MLM_WT_DEL_BSS_RSP_STATE))
+        (pStaDs->mlmStaContext.mlmState == eLIM_MLM_WT_DEL_BSS_RSP_STATE) ||
+         pStaDs->sta_deletion_in_progress)
     {
         /**
          * Already in the process of deleting context for the peer
          * and received Disassociation frame. Log and Ignore.
          */
         PELOGE(limLog(pMac, LOGE,
-               FL("received Disassoc frame in state %d from "MAC_ADDRESS_STR),
-               pStaDs->mlmStaContext.mlmState, MAC_ADDR_ARRAY(pHdr->sa));)
+               FL("received Disassoc frame in state %d from "MAC_ADDRESS_STR
+               ",isDisassocDeauthInProgress : %d\n"),
+               pStaDs->mlmStaContext.mlmState, MAC_ADDR_ARRAY(pHdr->sa),
+               pStaDs->isDisassocDeauthInProgress);)
 
         return;
     } 
-
+    pStaDs->sta_deletion_in_progress = true;
     if (pStaDs->mlmStaContext.mlmState != eLIM_MLM_LINK_ESTABLISHED_STATE)
     {
         /**
@@ -329,7 +336,7 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
         limRestorePreReassocState(pMac,eSIR_SME_REASSOC_REFUSED, reasonCode,psessionEntry);
         return;
     }
-
+    limUpdateLostLinkParams(pMac, psessionEntry, pRxPacketInfo);
     limPostSmeMessage(pMac, LIM_MLM_DISASSOC_IND,
                       (tANI_U32 *) &mlmDisassocInd);
 

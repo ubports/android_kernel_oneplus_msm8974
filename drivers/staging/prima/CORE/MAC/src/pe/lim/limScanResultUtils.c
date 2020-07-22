@@ -71,15 +71,17 @@
 tANI_U32
 limDeactivateMinChannelTimerDuringScan(tpAniSirGlobal pMac)
 {
-    if ((pMac->lim.gLimMlmState == eLIM_MLM_WT_PROBE_RESP_STATE) && (pMac->lim.gLimHalScanState == eLIM_HAL_SCANNING_STATE))
+    if ((VOS_TRUE ==
+         tx_timer_running(&pMac->lim.limTimers.gLimMinChannelTimer)) &&
+         (pMac->lim.gLimMlmState == eLIM_MLM_WT_PROBE_RESP_STATE) &&
+             (pMac->lim.gLimHalScanState == eLIM_HAL_SCANNING_STATE))
     {
         /**
-            * Beacon/Probe Response is received during active scanning.
-            * Deactivate MIN channel timer if running.
-            */
-        
+         * Beacon/Probe Response is received during active scanning.
+         * Deactivate MIN channel timer if running.
+         */
+
         limDeactivateAndChangeTimer(pMac,eLIM_MIN_CHANNEL_TIMER);
-        MTRACE(macTrace(pMac, TRACE_CODE_TIMER_ACTIVATE, NO_SESSION, eLIM_MAX_CHANNEL_TIMER));
         if (tx_timer_activate(&pMac->lim.limTimers.gLimMaxChannelTimer)
                                           == TX_TIMER_ERROR)
         {
@@ -495,7 +497,7 @@ limCheckAndAddBssDescription(tpAniSirGlobal pMac,
      */
 
     ieLen = WDA_GET_RX_PAYLOAD_LEN(pRxPacketInfo);
-    if (ieLen <= SIR_MAC_B_PR_SSID_OFFSET)
+    if (ieLen <= (SIR_MAC_B_PR_SSID_OFFSET + 2))
     {
         limLog(pMac, LOGP,
                FL("RX packet has invalid length %d"), ieLen);
@@ -515,6 +517,8 @@ limCheckAndAddBssDescription(tpAniSirGlobal pMac,
 
         return;
     }
+
+    vos_mem_zero(pBssDescr, frameLen);
 
     // In scan state, store scan result.
 #if defined WLAN_FEATURE_VOWIFI
@@ -545,25 +549,28 @@ limCheckAndAddBssDescription(tpAniSirGlobal pMac,
 #ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
     if (WDA_GET_OFFLOADSCANLEARN(pRxPacketInfo))
     {
-       limLog(pMac, LOG2, FL(" pHdr->addr1:"MAC_ADDRESS_STR),
+       limLog(pMac, LOG1, FL(" pHdr->addr1:"MAC_ADDRESS_STR),
               MAC_ADDR_ARRAY(pHdr->addr1));
-       limLog(pMac, LOG2, FL(" pHdr->addr2:"MAC_ADDRESS_STR),
+       limLog(pMac, LOG1, FL(" pHdr->addr2:"MAC_ADDRESS_STR),
               MAC_ADDR_ARRAY(pHdr->addr2));
-       limLog(pMac, LOG2, FL(" pHdr->addr3:"MAC_ADDRESS_STR),
+       limLog(pMac, LOG1, FL(" pHdr->addr3:"MAC_ADDRESS_STR),
               MAC_ADDR_ARRAY(pHdr->addr3));
-       limLog( pMac, LOG2, FL("Save this entry in LFR cache"));
-       status = limLookupNaddLfrHashEntry(pMac, pBssDescr, LIM_HASH_ADD, dontUpdateAll);
+       limLog( pMac, LOG1, FL("Save this entry in LFR cache"));
+       status = limLookupNaddLfrHashEntry(pMac, pBssDescr, LIM_HASH_ADD,
+                                          dontUpdateAll, ieLen - 2);
     }
     else
 #endif
     //If it is not scanning, only save unique results
     if (pMac->lim.gLimReturnUniqueResults || (!fScanning))
     {
-        status = limLookupNaddHashEntry(pMac, pBssDescr, LIM_HASH_UPDATE, dontUpdateAll);
+        status = limLookupNaddHashEntry(pMac, pBssDescr, LIM_HASH_UPDATE,
+                                        dontUpdateAll, ieLen - 2);
     }
     else
     {
-        status = limLookupNaddHashEntry(pMac, pBssDescr, LIM_HASH_ADD, dontUpdateAll);
+        status = limLookupNaddHashEntry(pMac, pBssDescr, LIM_HASH_ADD,
+                                        dontUpdateAll, ieLen - 2);
     }
 
     if(fScanning)
@@ -706,7 +713,7 @@ limInitHashTable(tpAniSirGlobal pMac)
 eHalStatus
 limLookupNaddHashEntry(tpAniSirGlobal pMac,
                        tLimScanResultNode *pBssDescr, tANI_U8 action,
-                       tANI_U8 dontUpdateAll)
+                       tANI_U8 dontUpdateAll, tANI_U32 ie_len)
 {
     tANI_U8                  index, ssidLen = 0;
     tANI_U8                found = false;
@@ -721,6 +728,11 @@ limLookupNaddHashEntry(tpAniSirGlobal pMac,
 
     //ieFields start with TLV of SSID IE
     ssidLen = * ((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1);
+    if ((ssidLen > ie_len) || (ssidLen > DOT11F_IE_SSID_MAX_LEN)) {
+        limLog(pMac, LOGE, FL("SSID length %d, IE overall Length %d"),
+               ssidLen, ie_len);
+        return eHAL_STATUS_FAILURE;
+    }
     pSirCap = (tSirMacCapabilityInfo *)&pBssDescr->bssDescription.capabilityInfo;
 
     for (pprev = ptemp; ptemp; pprev = ptemp, ptemp = ptemp->next)
@@ -734,6 +746,8 @@ limLookupNaddHashEntry(tpAniSirGlobal pMac,
              // matching band to update new channel info
             (vos_chan_to_band(pBssDescr->bssDescription.channelId) ==
                       vos_chan_to_band(ptemp->bssDescription.channelId)) &&
+            (*((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1) ==
+              *((tANI_U8 *) &ptemp->bssDescription.ieFields + 1)) &&
             vos_mem_compare( ((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1),
                            ((tANI_U8 *) &ptemp->bssDescription.ieFields + 1),
                            (tANI_U8) (ssidLen + 1)) &&
@@ -930,9 +944,9 @@ limInitLfrHashTable(tpAniSirGlobal pMac)
 eHalStatus
 limLookupNaddLfrHashEntry(tpAniSirGlobal pMac,
                           tLimScanResultNode *pBssDescr, tANI_U8 action,
-                          tANI_U8 dontUpdateAll)
+                          tANI_U8 dontUpdateAll, tANI_U32 ie_len)
 {
-    tANI_U8                  index, ssidLen = 0;
+    tANI_U8 index, ssidLen = 0;
     tLimScanResultNode *ptemp, *pprev;
     tSirMacCapabilityInfo *pSirCap, *pSirCapTemp;
     int idx, len;
@@ -944,6 +958,11 @@ limLookupNaddLfrHashEntry(tpAniSirGlobal pMac,
 
     //ieFields start with TLV of SSID IE
     ssidLen = * ((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1);
+    if ((ssidLen > ie_len) || (ssidLen > DOT11F_IE_SSID_MAX_LEN)) {
+        limLog(pMac, LOGE, FL("SSID length %d, IE overall Length %d"),
+               ssidLen, ie_len);
+        return eHAL_STATUS_FAILURE;
+    }
     pSirCap = (tSirMacCapabilityInfo *)&pBssDescr->bssDescription.capabilityInfo;
 
     for (pprev = ptemp; ptemp; pprev = ptemp, ptemp = ptemp->next)
@@ -956,6 +975,8 @@ limLookupNaddLfrHashEntry(tpAniSirGlobal pMac,
                       sizeof(tSirMacAddr))) &&   //matching BSSID
             (pBssDescr->bssDescription.channelId ==
                                       ptemp->bssDescription.channelId) &&
+            (*((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1) ==
+              *((tANI_U8 *) &ptemp->bssDescription.ieFields + 1)) &&
             vos_mem_compare( ((tANI_U8 *) &pBssDescr->bssDescription.ieFields + 1),
                            ((tANI_U8 *) &ptemp->bssDescription.ieFields + 1),
                            (tANI_U8) (ssidLen + 1)) &&

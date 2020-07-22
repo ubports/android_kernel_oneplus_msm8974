@@ -52,6 +52,14 @@ static int auto_detect;
 #define WCN3620A      0x5112
 #define WCN3610       0x9101
 
+#define WCN3660       0x0200
+#define WCN3660A      0x0300
+#define WCN3660B      0x0400
+#define WCN3620       0x5111
+#define WCN3620A      0x5112
+#define WCN3610       0x9101
+#define WCN3610V1     0x9110
+
 #define WCNSS_PMU_CFG_IRIS_XO_CFG          BIT(3)
 #define WCNSS_PMU_CFG_IRIS_XO_EN           BIT(4)
 #define WCNSS_PMU_CFG_IRIS_XO_CFG_STS      BIT(6) /* 1: in progress, 0: done */
@@ -181,6 +189,50 @@ void  wcnss_iris_reset(u32 reg, void __iomem *pmu_conf_reg)
 	reg &= ~WCNSS_PMU_CFG_IRIS_RESET;
 	writel_relaxed(reg, pmu_conf_reg);
 }
+
+int wcnss_get_iris_name(char *iris_name)
+{
+	struct wcnss_wlan_config *cfg = NULL;
+	int iris_id;
+
+	cfg = wcnss_get_wlan_config();
+
+	if (cfg) {
+		iris_id = cfg->iris_id;
+		iris_id = iris_id >> 16;
+	} else {
+		return 1;
+	}
+
+	switch (iris_id) {
+	case WCN3660:
+		memcpy(iris_name, "WCN3660", sizeof("WCN3660"));
+		break;
+	case WCN3660A:
+		memcpy(iris_name, "WCN3660A", sizeof("WCN3660A"));
+		break;
+	case WCN3660B:
+		memcpy(iris_name, "WCN3660B", sizeof("WCN3660B"));
+		break;
+	case WCN3620:
+		memcpy(iris_name, "WCN3620", sizeof("WCN3620"));
+		break;
+	case WCN3620A:
+		memcpy(iris_name, "WCN3620A", sizeof("WCN3620A"));
+		break;
+	case WCN3610:
+		memcpy(iris_name, "WCN3610", sizeof("WCN3610"));
+		break;
+	case WCN3610V1:
+		memcpy(iris_name, "WCN3610V1", sizeof("WCN3610V1"));
+		break;
+	default:
+		return 1;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(wcnss_get_iris_name);
 
 static int configure_iris_xo(struct device *dev, bool use_48mhz_xo, int on,
 			int *iris_xo_set)

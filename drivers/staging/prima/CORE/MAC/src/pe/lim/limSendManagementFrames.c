@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -53,7 +53,7 @@
 #include "limAssocUtils.h"
 #include "limFT.h"
 #ifdef WLAN_FEATURE_11W
-#include "wniCfgAp.h"
+#include "wniCfg.h"
 #endif
 
 #if defined WLAN_FEATURE_VOWIFI
@@ -62,7 +62,7 @@
 
 #include "wlan_qct_wda.h"
 
-
+#define IS_BROADCAST_MAC(x) (((x[0] & x[1] & x[2] & x[3] & x[4] & x[5]) == 0xff) ? 1 : 0)
 ////////////////////////////////////////////////////////////////////////
 
 tSirRetStatus limStripOffExtCapIE(tpAniSirGlobal pMac,
@@ -109,7 +109,7 @@ tSirRetStatus limStripOffExtCapIE(tpAniSirGlobal pMac,
             tempLen += (elem_len + 2);
         }
         else
-        { /*Est Cap present size is 8 + 2 byte at present*/
+        {
             if ( NULL != pExtractedExtCapIEBuf )
             {
                 vos_mem_set(pExtractedExtCapIEBuf,
@@ -135,6 +135,7 @@ void limUpdateExtCapIEtoStruct(tpAniSirGlobal pMac,
                             tDot11fIEExtCap *pDst)
 {
     tANI_U8 pOut[DOT11F_IE_EXTCAP_MAX_LEN];
+    tANI_U8 tag, len, *val;
 
     if ( NULL == pBuf )
     {
@@ -149,22 +150,23 @@ void limUpdateExtCapIEtoStruct(tpAniSirGlobal pMac,
         return ;
     }
 
-    if ( DOT11F_EID_EXTCAP != pBuf[0] ||
-         pBuf[1] > DOT11F_IE_EXTCAP_MAX_LEN )
+    /* Get tlv */
+    tag = pBuf[0];
+    len = pBuf[1];
+    val = &pBuf[2];
+
+    if ( DOT11F_EID_EXTCAP != tag ||
+         len > DOT11F_IE_EXTCAP_MAX_LEN )
     {
         limLog( pMac, LOG1,
-               FL("Invalid IEs eid = %d elem_len=%d "),
-                                               pBuf[0],pBuf[1]);
+               FL("Invalid IEs eid = %d elem_len=%d "), tag, len);
         return;
     }
-    vos_mem_set(( tANI_U8* )&pOut[0], DOT11F_IE_EXTCAP_MAX_LEN, 0);
-    /* conversion should follow 4, 2, 2 byte order */
-    limUtilsframeshtonl(pMac, &pOut[0],*((tANI_U32*)&pBuf[2]),0);
-    limUtilsframeshtons(pMac, &pOut[4],*((tANI_U16*)&pBuf[6]),0);
-    limUtilsframeshtons(pMac, &pOut[6],*((tANI_U16*)&pBuf[8]),0);
 
+    vos_mem_zero(pOut, DOT11F_IE_EXTCAP_MAX_LEN);
+    vos_mem_copy(pOut, val, len);
     if ( DOT11F_PARSE_SUCCESS != dot11fUnpackIeExtCap( pMac,
-                &pOut[0], DOT11F_IE_EXTCAP_MAX_LEN, pDst) )
+                 pOut, len, pDst) )
     {
         limLog( pMac, LOGE,
                FL("dot11fUnpackIeExtCap Parse Error "));
@@ -196,17 +198,40 @@ tSirRetStatus limStripOffExtCapIEAndUpdateStruct(tpAniSirGlobal pMac,
 }
 
 void limMergeExtCapIEStruct(tDot11fIEExtCap *pDst,
-                            tDot11fIEExtCap *pSrc)
+                            tDot11fIEExtCap *pSrc,
+                            bool add)
 {
-    tANI_U8 *tempDst = (tANI_U8 *)pDst;
-    tANI_U8 *tempSrc = (tANI_U8 *)pSrc;
-    tANI_U8 structlen = sizeof(tDot11fIEExtCap);
+    tANI_U8 *tempDst = (tANI_U8 *)pDst->bytes;
+    tANI_U8 *tempSrc = (tANI_U8 *)pSrc->bytes;
+    tANI_U8 structlen = DOT11F_IE_EXTCAP_MAX_LEN;
 
+    // if src is not present, nothing to do
+    if(!pSrc->present) {
+        return;
+    }
+
+    // if dst is not present, and add=false, nothing to do
+    if (!pDst->present && !add) {
+        return;
+    }
+
+    // in other cases, need to merge the bits
+    pDst->present = 1;
     while(tempDst && tempSrc && structlen--)
     {
-        *tempDst |= *tempSrc;
+        if (add) {
+            *tempDst |= *tempSrc;
+        } else {
+            *tempDst &= *tempSrc;
+        }
         tempDst++;
         tempSrc++;
+    }
+    pDst->num_bytes = lim_compute_ext_cap_ie_length(pDst);
+
+    // if all bits are zero, it means it is not prsent.
+    if (pDst->num_bytes == 0) {
+        pDst->present = 0;
     }
 }
 
@@ -317,7 +342,6 @@ limSendProbeReqMgmtFrame(tpAniSirGlobal pMac,
     tANI_U8              sessionId;
     tANI_U8             *p2pIe = NULL;
     tANI_U32             txFlag = 0;
-    tANI_U32             chanbond24G = 0;
 
 #ifndef GEN4_SCAN
     return eSIR_FAILURE;
@@ -414,9 +438,9 @@ limSendProbeReqMgmtFrame(tpAniSirGlobal pMac,
            }
     }
 
-    /* Get HT40 capability  for 2.4GHz band */
-    wlan_cfgGetInt(pMac,WNI_CFG_CHANNEL_BONDING_24G,&chanbond24G);
-    if( (nChannelNum <= SIR_11B_CHANNEL_END) && chanbond24G != TRUE)
+    if((nChannelNum <= SIR_11B_CHANNEL_END)
+       && (!IS_HT40_OBSS_SCAN_FEATURE_ENABLE)
+       && (!pMac->roam.configParam.channelBondingMode24GHz))
     {
         pr.HTCaps.supportedChannelWidthSet = eHT_CHANNEL_WIDTH_20MHZ;
         pr.HTCaps.shortGI40MHz = 0;
@@ -427,12 +451,13 @@ limSendProbeReqMgmtFrame(tpAniSirGlobal pMac,
        //Include HT Capability IE
        if (psessionEntry->vhtCapability)
        {
-          PopulateDot11fVHTCaps( pMac, &pr.VHTCaps, eSIR_FALSE );
+          PopulateDot11fVHTCaps( pMac, &pr.VHTCaps,
+                      psessionEntry->currentOperChannel , eSIR_FALSE );
        }
     }  else {
        if (IS_DOT11_MODE_VHT(dot11mode))
        {
-          PopulateDot11fVHTCaps( pMac, &pr.VHTCaps, eSIR_FALSE );
+          PopulateDot11fVHTCaps( pMac, &pr.VHTCaps, nChannelNum, eSIR_FALSE );
        }
     }
 #endif
@@ -523,6 +548,11 @@ limSendProbeReqMgmtFrame(tpAniSirGlobal pMac,
       ) 
     {
         txFlag |= HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME; 
+    }
+
+    if( ( psessionEntry != NULL ) && ( psessionEntry->is11Gonly == true ) &&
+                                     ( !IS_BROADCAST_MAC(bssid) ) ){
+        txFlag |= HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME;
     }
 
     halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) sizeof(tSirMacMgmtHdr) + nPayload,
@@ -735,20 +765,41 @@ limSendProbeRspMgmtFrame(tpAniSirGlobal pMac,
         PopulateDot11fHTCaps( pMac, psessionEntry, &pFrm->HTCaps );
         PopulateDot11fHTInfo( pMac, &pFrm->HTInfo, psessionEntry );
     }
+
+#ifdef WLAN_FEATURE_AP_HT40_24G
+    /* Populate Overlapping BSS Scan Parameters IEs,
+     * when operating in HT40 in 2.4GHz.
+     */
+    if ((pMac->roam.configParam.apHT40_24GEnabled)
+     && (IS_DOT11_MODE_HT(psessionEntry->dot11mode)))
+    {
+        PopulateDot11fOBSSScanParameters( pMac, &pFrm->OBSSScanParameters,
+                                                             psessionEntry);
+        /* 10.15.8 Support of DSSS/CCK in 40 MHz, An associated HT STA in
+         * a 20/40 MHz BSS may generate DSSS/CCK transmissions.Set DSSS/CCK
+         * Mode in 40 MHz bit in HT capablity.
+         */
+        pFrm->HTCaps.dsssCckMode40MHz = 1;
+    }
+#endif
+
+    PopulateDot11fExtCap( pMac, &pFrm->ExtCap, psessionEntry);
+
 #ifdef WLAN_FEATURE_11AC
     if(psessionEntry->vhtCapability)
     {
         limLog( pMac, LOG1, FL("Populate VHT IE in Probe Response"));
-        PopulateDot11fVHTCaps( pMac, &pFrm->VHTCaps, eSIR_TRUE );
-        PopulateDot11fVHTOperation( pMac, &pFrm->VHTOperation );
+        PopulateDot11fVHTCaps( pMac, &pFrm->VHTCaps,
+                              psessionEntry->currentOperChannel, eSIR_TRUE );
+        PopulateDot11fVHTOperation( pMac, &pFrm->VHTOperation ,
+                                          psessionEntry->currentOperChannel);
         // we do not support multi users yet
         //PopulateDot11fVHTExtBssLoad( pMac, &frm.VHTExtBssLoad );
-        PopulateDot11fExtCap( pMac, &pFrm->ExtCap, psessionEntry);
     }
 #endif
 
 
-    if ( psessionEntry->pLimStartBssReq ) 
+    if ( psessionEntry->pLimStartBssReq )
     {
       PopulateDot11fWPA( pMac, &( psessionEntry->pLimStartBssReq->rsnIE ),
           &pFrm->WPA );
@@ -918,7 +969,7 @@ limSendProbeRspMgmtFrame(tpAniSirGlobal pMac,
     /*merge ExtCap IE*/
     if (extractedExtCapFlag && extractedExtCap.present)
     {
-        limMergeExtCapIEStruct(&pFrm->ExtCap, &extractedExtCap);
+        limMergeExtCapIEStruct(&pFrm->ExtCap, &extractedExtCap, true);
     }
 
     nStatus = dot11fGetPackedProbeResponseSize( pMac, pFrm, &nPayload );
@@ -1293,8 +1344,8 @@ limSendAddtsReqActionFrame(tpAniSirGlobal    pMac,
         }
     }
 
-    PELOG3(limLog( pMac, LOG3, FL("Sending an Add TS Request frame to ") );
-    limPrintMacAddr( pMac, peerMacAddr, LOG3 );)
+    limLog( pMac, LOG1, FL("Sending an Add TS Request frame to ") );
+    limPrintMacAddr( pMac, peerMacAddr, LOG1 );
 
     if( ( SIR_BAND_5_GHZ == limGetRFBand(psessionEntry->currentOperChannel))
        || ( psessionEntry->pePersona == VOS_P2P_CLIENT_MODE ) ||
@@ -1456,6 +1507,7 @@ limSendAssocRspMgmtFrame(tpAniSirGlobal pMac,
         if ( pSta->mlmStaContext.htCapability  && 
              psessionEntry->htCapability )
         {
+            limLog(pMac, LOG1, FL("Populate HT IEs in Assoc Response"));
             PopulateDot11fHTCaps( pMac, psessionEntry, &frm.HTCaps );
             /*
              *Check the STA capability and update the HTCaps accordingly
@@ -1469,15 +1521,41 @@ limSendAssocRspMgmtFrame(tpAniSirGlobal pMac,
 
             PopulateDot11fHTInfo( pMac, &frm.HTInfo, psessionEntry );
         }
+         limLog(pMac, LOG1, FL("SupportedChnlWidth: %d, mimoPS: %d, GF: %d,"
+                          "shortGI20:%d, shortGI40: %d, dsssCck: %d, AMPDU Param: %x"),
+                 frm.HTCaps.supportedChannelWidthSet, frm.HTCaps.mimoPowerSave,
+                 frm.HTCaps.greenField, frm.HTCaps.shortGI20MHz, frm.HTCaps.shortGI40MHz,
+                 frm.HTCaps.dsssCckMode40MHz, frm.HTCaps.maxRxAMPDUFactor);
 
+
+
+#ifdef WLAN_FEATURE_AP_HT40_24G
+        /* Populate Overlapping BSS Scan Parameters IEs,
+         * when operating in HT40 in 2.4GHz.
+         */
+        if ((pMac->roam.configParam.apHT40_24GEnabled)
+         && (IS_DOT11_MODE_HT(psessionEntry->dot11mode)))
+        {
+            PopulateDot11fOBSSScanParameters( pMac, &frm.OBSSScanParameters,
+                                                               psessionEntry);
+            /* 10.15.8 Support of DSSS/CCK in 40 MHz, An associated HT STA in
+             * a 20/40 MHz BSS may generate DSSS/CCK transmissions.Set DSSS/CCK
+             * Mode in 40 MHz bit in HT capablity.
+             */
+            frm.HTCaps.dsssCckMode40MHz = 1;
+        }
+#endif
+
+        PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
 #ifdef WLAN_FEATURE_11AC
         if( pSta->mlmStaContext.vhtCapability && 
             psessionEntry->vhtCapability )
         {
             limLog( pMac, LOG1, FL("Populate VHT IEs in Assoc Response"));
-            PopulateDot11fVHTCaps( pMac, &frm.VHTCaps, eSIR_TRUE );
-            PopulateDot11fVHTOperation( pMac, &frm.VHTOperation);
-            PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
+            PopulateDot11fVHTCaps( pMac, &frm.VHTCaps,
+                    psessionEntry->currentOperChannel, eSIR_TRUE );
+            PopulateDot11fVHTOperation( pMac, &frm.VHTOperation,
+                                         psessionEntry->currentOperChannel);
         }
 #endif
 
@@ -1574,7 +1652,7 @@ limSendAssocRspMgmtFrame(tpAniSirGlobal pMac,
     /* merge the ExtCap struct*/
     if (extractedExtCapFlag && extractedExtCap.present)
     {
-        limMergeExtCapIEStruct(&(frm.ExtCap), &extractedExtCap);
+        limMergeExtCapIEStruct(&(frm.ExtCap), &extractedExtCap, true);
     }
 
     nStatus = dot11fGetPackedAssocResponseSize( pMac, &frm, &nPayload );
@@ -1649,16 +1727,16 @@ limSendAssocRspMgmtFrame(tpAniSirGlobal pMac,
 
     if (subType == LIM_ASSOC)
     {
-        PELOG1(limLog(pMac, LOG1,
+        limLog(pMac, LOG1,
                FL("*** Sending Assoc Resp status %d aid %d to "),
-               statusCode, aid);)
+               statusCode, aid);
     }    
     else{
-        PELOG1(limLog(pMac, LOG1,
+        limLog(pMac, LOG1,
                FL("*** Sending ReAssoc Resp status %d aid %d to "),
-               statusCode, aid);)
+               statusCode, aid);
     }
-    PELOG1(limPrintMacAddr(pMac, pMacHdr->da, LOG1);)
+    limPrintMacAddr(pMac, pMacHdr->da, LOG1);
 
     if ( addnIEPresent )
     {
@@ -1682,12 +1760,28 @@ limSendAssocRspMgmtFrame(tpAniSirGlobal pMac,
     MTRACE(macTrace(pMac, TRACE_CODE_TX_MGMT,
            psessionEntry->peSessionId,
            pMacHdr->fc.subType));
-    /// Queue Association Response frame in high priority WQ
-    halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) nBytes,
-                            HAL_TXRX_FRM_802_11_MGMT,
-                            ANI_TXDIR_TODS,
-                            7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
-                            limTxComplete, pFrame, txFlag );
+
+    if (IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        limLog(pMac, LOG1, FL("Re/AssocRsp - txBdToken %u"), pMac->lim.txBdToken);
+        /// Queue Association Response frame in high priority WQ
+        halstatus = halTxFrameWithTxComplete( pMac, pPacket, ( tANI_U16 ) nBytes,
+                HAL_TXRX_FRM_802_11_MGMT,
+                ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, limTxBdComplete,
+                txFlag, pMac->lim.txBdToken );
+        pMac->lim.txBdToken++;
+    }
+    else
+    {
+        /// Queue Association Response frame in high priority WQ
+        halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) nBytes,
+                HAL_TXRX_FRM_802_11_MGMT,
+                ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, txFlag );
+    }
     MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
            psessionEntry->peSessionId,
            halstatus));
@@ -1951,9 +2045,9 @@ limSendAddtsRspActionFrame(tpAniSirGlobal     pMac,
         }
     }
 
-    PELOG1(limLog( pMac, LOG1, FL("Sending an Add TS Response (status %d) to "),
+    limLog( pMac, LOG1, FL("Sending an Add TS Response (status %d) to "),
             nStatusCode );
-    limPrintMacAddr( pMac, pMacHdr->da, LOG1 );)
+    limPrintMacAddr( pMac, pMacHdr->da, LOG1 );
 
     if( ( SIR_BAND_5_GHZ == limGetRFBand(psessionEntry->currentOperChannel))
        || ( psessionEntry->pePersona == VOS_P2P_CLIENT_MODE ) ||
@@ -2141,8 +2235,8 @@ limSendDeltsReqActionFrame(tpAniSirGlobal  pMac,
         }
     }
 
-    PELOG1(limLog(pMac, LOG1, FL("Sending DELTS REQ (size %d) to "), nBytes);
-    limPrintMacAddr(pMac, pMacHdr->da, LOG1);)
+    limLog(pMac, LOG1, FL("Sending DELTS REQ (size %d) to "), nBytes);
+    limPrintMacAddr(pMac, pMacHdr->da, LOG1);
 
     if( ( SIR_BAND_5_GHZ == limGetRFBand(psessionEntry->currentOperChannel))
        || ( psessionEntry->pePersona == VOS_P2P_CLIENT_MODE ) ||
@@ -2180,7 +2274,7 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
     tDot11fAssocRequest *pFrm;
     tANI_U16            caps;
     tANI_U8            *pFrame;
-    tSirRetStatus       nSirStatus;
+    tSirRetStatus       nSirStatus = eSIR_FAILURE;
     tLimMlmAssocCnf     mlmAssocCnf;
     tANI_U32            nPayload, nStatus;
     tANI_U8             fQosEnabled, fWmeEnabled, fWsmEnabled;
@@ -2224,9 +2318,12 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
     vos_mem_set( ( tANI_U8* )pFrm, sizeof( tDot11fAssocRequest ), 0 );
 
     vos_mem_set(( tANI_U8* )&extractedExtCap, sizeof( tDot11fIEExtCap ), 0);
-    nSirStatus = limStripOffExtCapIEAndUpdateStruct(pMac, pAddIE,
+    if (psessionEntry->ExtCap.present)
+    {
+        nSirStatus = limStripOffExtCapIEAndUpdateStruct(pMac, pAddIE,
                                   &nAddIELen,
                                   &extractedExtCap );
+    }
     if(eSIR_SUCCESS != nSirStatus )
     {
         extractedExtCapFlag = eANI_BOOLEAN_FALSE;
@@ -2238,10 +2335,12 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
      */
     else
     {
-        if(extractedExtCap.interworkingService)
-        {
-            extractedExtCap.qosMap = 1;
+        struct s_ext_cap *p_ext_cap = (struct s_ext_cap *)extractedExtCap.bytes;
+        if (p_ext_cap->interworkingService) {
+            p_ext_cap->qosMap = 1;
         }
+        extractedExtCap.num_bytes = lim_compute_ext_cap_ie_length(&extractedExtCap);
+        extractedExtCapFlag = (extractedExtCap.num_bytes > 0);
     }
 
     caps = pMlmAssocReq->capabilityInfo;
@@ -2370,6 +2469,7 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
     if ( psessionEntry->htCapability &&
             pMac->lim.htCapabilityPresentInBeacon)
     {
+        limLog(pMac, LOG1, FL("Populate HT IEs in Assoc Request"));
         PopulateDot11fHTCaps( pMac, psessionEntry, &pFrm->HTCaps );
 #ifdef DISABLE_GF_FOR_INTEROP
 
@@ -2389,15 +2489,26 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
 #endif
 
     }
+
+    limLog(pMac, LOG1, FL("SupportedChnlWidth: %d, mimoPS: %d, GF: %d,"
+                          "shortGI20:%d, shortGI40: %d, dsssCck: %d, AMPDU Param: %x"),
+           pFrm->HTCaps.supportedChannelWidthSet, pFrm->HTCaps.mimoPowerSave,
+           pFrm->HTCaps.greenField, pFrm->HTCaps.shortGI20MHz, pFrm->HTCaps.shortGI40MHz,
+           pFrm->HTCaps.dsssCckMode40MHz, pFrm->HTCaps.maxRxAMPDUFactor);
+
+
 #ifdef WLAN_FEATURE_11AC
     if ( psessionEntry->vhtCapability &&
         psessionEntry->vhtCapabilityPresentInBeacon)
     {
         limLog( pMac, LOG1, FL("Populate VHT IEs in Assoc Request"));
-        PopulateDot11fVHTCaps( pMac, &pFrm->VHTCaps, eSIR_FALSE );
+        PopulateDot11fVHTCaps( pMac, &pFrm->VHTCaps,
+                        psessionEntry->currentOperChannel, eSIR_FALSE );
+
     }
 #endif
-    PopulateDot11fExtCap( pMac, &pFrm->ExtCap, psessionEntry);
+    if (psessionEntry->ExtCap.present)
+        PopulateDot11fExtCap( pMac, &pFrm->ExtCap, psessionEntry);
 
 #if defined WLAN_FEATURE_VOWIFI_11R
     if (psessionEntry->pLimJoinReq->is11Rconnection)
@@ -2433,7 +2544,13 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
     /* merge the ExtCap struct*/
     if (extractedExtCapFlag && extractedExtCap.present)
     {
-        limMergeExtCapIEStruct(&pFrm->ExtCap, &extractedExtCap);
+        limMergeExtCapIEStruct(&pFrm->ExtCap, &extractedExtCap, true);
+    }
+
+    if (pFrm->ExtCap.present && psessionEntry->ExtCap.present) {
+        limMergeExtCapIEStruct(&pFrm->ExtCap, &psessionEntry->ExtCap, false);
+        limLog(pMac, LOG1,
+            FL("Clear the bits in EXTCAP IE that AP don't support to avoid IoT issues."));
     }
 
     nStatus = dot11fGetPackedAssocRequestSize( pMac, pFrm, &nPayload );
@@ -2470,9 +2587,6 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
         mlmAssocCnf.sessionId = psessionEntry->peSessionId;
 
         mlmAssocCnf.resultCode = eSIR_SME_RESOURCES_UNAVAILABLE;
-
-        palPktFree( pMac->hHdd, HAL_TXRX_FRM_802_11_MGMT,
-                ( void* ) pFrame, ( void* ) pPacket );
 
         limPostSmeMessage( pMac, LIM_MLM_ASSOC_CNF,
                 ( tANI_U32* ) &mlmAssocCnf);
@@ -2573,14 +2687,30 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
            psessionEntry->peSessionId,
            pMacHdr->fc.subType));
 
-    // enable caching
-    WLANTL_EnableCaching(psessionEntry->staId);
-
-    halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
-            HAL_TXRX_FRM_802_11_MGMT,
-            ANI_TXDIR_TODS,
-            7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
-            limTxComplete, pFrame, txFlag );
+    if( ( psessionEntry->is11Gonly == true ) &&
+                          ( !IS_BROADCAST_MAC(pMlmAssocReq->peerMacAddr) ) ){
+        txFlag |= HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME;
+    }
+    if (IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        limLog(pMac, LOG1, FL("Assoc Req - txBdToken %u"), pMac->lim.txBdToken);
+        halstatus = halTxFrameWithTxComplete( pMac, pPacket,
+                ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
+                HAL_TXRX_FRM_802_11_MGMT, ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, limTxBdComplete, txFlag,
+                pMac->lim.txBdToken);
+        pMac->lim.txBdToken++;
+    }
+    else
+    {
+        halstatus = halTxFrame( pMac, pPacket,
+                ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
+                HAL_TXRX_FRM_802_11_MGMT,
+                ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, txFlag );
+    }
     MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
            psessionEntry->peSessionId,
            halstatus));
@@ -2592,6 +2722,9 @@ limSendAssocReqMgmtFrame(tpAniSirGlobal   pMac,
         vos_mem_free(pFrm);
         return;
     }
+
+    //Enable caching only if Assoc Request is successfully submitted to the h/w
+    WLANTL_EnableCaching(psessionEntry->staId);
 
     // Free up buffer allocated for mlmAssocReq
     vos_mem_free(pMlmAssocReq);
@@ -2832,7 +2965,11 @@ limSendReassocReqWithFTIEsMgmtFrame(tpAniSirGlobal     pMac,
     {
         PopulateDot11fHTCaps( pMac, psessionEntry, &frm.HTCaps );
     }
-
+    limLog(pMac, LOG1, FL("SupportedChnlWidth: %d, mimoPS: %d, GF: %d,"
+                          "shortGI20:%d, shortGI40: %d, dsssCck: %d, AMPDU Param: %x"),
+                 frm.HTCaps.supportedChannelWidthSet, frm.HTCaps.mimoPowerSave,
+                 frm.HTCaps.greenField, frm.HTCaps.shortGI20MHz, frm.HTCaps.shortGI40MHz,
+                 frm.HTCaps.dsssCckMode40MHz, frm.HTCaps.maxRxAMPDUFactor);
 #if defined WLAN_FEATURE_VOWIFI_11R
     if ( psessionEntry->pLimReAssocReq->bssDescription.mdiePresent &&
          (pMac->ft.ftSmeContext.addMDIE == TRUE)
@@ -2850,10 +2987,13 @@ limSendReassocReqWithFTIEsMgmtFrame(tpAniSirGlobal     pMac,
              psessionEntry->vhtCapabilityPresentInBeacon)
     {
         limLog( pMac, LOG1, FL("Populate VHT IEs in Re-Assoc Request"));
-        PopulateDot11fVHTCaps( pMac, &frm.VHTCaps, eSIR_FALSE );
+        PopulateDot11fVHTCaps( pMac, &frm.VHTCaps,
+                         psessionEntry->currentOperChannel, eSIR_FALSE );
+
     }
 #endif
-    PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
+    if (psessionEntry->ExtCap.present)
+        PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
 
     nStatus = dot11fGetPackedReAssocRequestSize( pMac, &frm, &nPayload );
     if ( DOT11F_FAILED( nStatus ) )
@@ -3014,18 +3154,28 @@ limSendReassocReqWithFTIEsMgmtFrame(tpAniSirGlobal     pMac,
        psessionEntry->assocReqLen = (ft_ies_length);
     }
 
-
-    // Enable TL cahching in case of roaming
-    WLANTL_EnableCaching(psessionEntry->staId);
-
     MTRACE(macTrace(pMac, TRACE_CODE_TX_MGMT,
            psessionEntry->peSessionId,
            pMacHdr->fc.subType));
-    halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) (nBytes + ft_ies_length),
-            HAL_TXRX_FRM_802_11_MGMT,
-            ANI_TXDIR_TODS,
-            7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
-            limTxComplete, pFrame, txFlag );
+    if (IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        limLog( pMac, LOG1, FL("Reassoc req - txBdToken %u"), pMac->lim.txBdToken);
+        halstatus = halTxFrameWithTxComplete( pMac, pPacket,
+                ( tANI_U16 ) (nBytes + ft_ies_length),
+                HAL_TXRX_FRM_802_11_MGMT, ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, limTxBdComplete, txFlag,
+                pMac->lim.txBdToken);
+        pMac->lim.txBdToken++;
+    }
+    else
+    {
+        halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) (nBytes + ft_ies_length),
+                HAL_TXRX_FRM_802_11_MGMT,
+                ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, txFlag );
+    }
     MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
            psessionEntry->peSessionId,
            halstatus));
@@ -3037,6 +3187,9 @@ limSendReassocReqWithFTIEsMgmtFrame(tpAniSirGlobal     pMac,
         //Pkt will be freed up by the callback
         goto end;
     }
+
+    // Enable TL cahching in case of roaming
+    WLANTL_EnableCaching(psessionEntry->staId);
 
 end:
     // Free up buffer allocated for mlmAssocReq
@@ -3051,16 +3204,48 @@ void limSendRetryReassocReqFrame(tpAniSirGlobal     pMac,
 {
     tLimMlmReassocCnf       mlmReassocCnf; // keep sme
     tLimMlmReassocReq       *pTmpMlmReassocReq = NULL;
-    if(NULL == pTmpMlmReassocReq)
+#ifdef FEATURE_WLAN_ESE
+    tANI_U32                val=0;
+#endif
+    if (pMlmReassocReq == NULL)
     {
-        pTmpMlmReassocReq = vos_mem_malloc(sizeof(tLimMlmReassocReq));
-        if ( NULL == pTmpMlmReassocReq ) goto end;
-        vos_mem_set( pTmpMlmReassocReq, sizeof(tLimMlmReassocReq), 0);
-        vos_mem_copy( pTmpMlmReassocReq, pMlmReassocReq, sizeof(tLimMlmReassocReq));
+        limLog(pMac, LOGE,
+           FL("Invalid pMlmReassocReq"));
+        goto end;
     }
+
+    pTmpMlmReassocReq = vos_mem_malloc(sizeof(tLimMlmReassocReq));
+    if ( NULL == pTmpMlmReassocReq ) goto end;
+    vos_mem_set( pTmpMlmReassocReq, sizeof(tLimMlmReassocReq), 0);
+    vos_mem_copy( pTmpMlmReassocReq, pMlmReassocReq, sizeof(tLimMlmReassocReq));
 
     // Prepare and send Reassociation request frame
     // start reassoc timer.
+#ifdef FEATURE_WLAN_ESE
+    /*
+     * In case of Ese Reassociation, change the reassoc timer
+     * value.
+     */
+    val = pMlmReassocReq->reassocFailureTimeout;
+    if (psessionEntry->isESEconnection)
+    {
+        val = val/LIM_MAX_REASSOC_RETRY_LIMIT;
+    }
+    if (tx_timer_deactivate(&pMac->lim.limTimers.gLimReassocFailureTimer) !=
+                                                TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+           FL("unable to deactivate Reassoc failure timer"));
+    }
+    val = SYS_MS_TO_TICKS(val);
+    if (tx_timer_change(&pMac->lim.limTimers.gLimReassocFailureTimer,
+                                val, 0) != TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+          FL("unable to change Reassociation failure timer"));
+    }
+#endif
+
     pMac->lim.limTimers.gLimReassocFailureTimer.sessionId = psessionEntry->peSessionId;
     // Start reassociation failure timer
     MTRACE(macTrace(pMac, TRACE_CODE_TIMER_ACTIVATE, psessionEntry->peSessionId, eLIM_REASSOC_FAIL_TIMER));
@@ -3123,7 +3308,7 @@ limSendReassocReqMgmtFrame(tpAniSirGlobal     pMac,
 #if defined WLAN_FEATURE_VOWIFI
     tANI_U8               PowerCapsPopulated = FALSE;
 #endif
-    tpSirMacMgmtHdr     pMacHdr;
+    tpSirMacMgmtHdr       pMacHdr;
 
     if(NULL == psessionEntry)
     {
@@ -3268,13 +3453,20 @@ limSendReassocReqMgmtFrame(tpAniSirGlobal     pMac,
     {
         PopulateDot11fHTCaps( pMac, psessionEntry, &frm.HTCaps );
     }
+    limLog(pMac, LOG1, FL("SupportedChnlWidth: %d, mimoPS: %d, GF: %d,"
+                          "shortGI20:%d, shortGI40: %d, dsssCck: %d, AMPDU Param: %x"),
+                 frm.HTCaps.supportedChannelWidthSet, frm.HTCaps.mimoPowerSave,
+                 frm.HTCaps.greenField, frm.HTCaps.shortGI20MHz, frm.HTCaps.shortGI40MHz,
+                 frm.HTCaps.dsssCckMode40MHz, frm.HTCaps.maxRxAMPDUFactor);
 #ifdef WLAN_FEATURE_11AC
     if ( psessionEntry->vhtCapability &&
              psessionEntry->vhtCapabilityPresentInBeacon)
     {
         limLog( pMac, LOG1, FL("Populate VHT IEs in Re-Assoc Request"));
-        PopulateDot11fVHTCaps( pMac, &frm.VHTCaps, eSIR_FALSE );
-        PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
+        PopulateDot11fVHTCaps( pMac, &frm.VHTCaps,
+                     psessionEntry->currentOperChannel, eSIR_FALSE );
+        if (psessionEntry->ExtCap.present)
+            PopulateDot11fExtCap( pMac, &frm.ExtCap, psessionEntry);
     }
 #endif
 
@@ -3391,14 +3583,25 @@ limSendReassocReqMgmtFrame(tpAniSirGlobal     pMac,
            psessionEntry->peSessionId,
            pMacHdr->fc.subType));
 
-    // enable caching
-    WLANTL_EnableCaching(psessionEntry->staId);
-
-    halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
-                            HAL_TXRX_FRM_802_11_MGMT,
-                            ANI_TXDIR_TODS,
-                            7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
-                            limTxComplete, pFrame, txFlag );
+    if (IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        limLog(pMac, LOG1, FL("Reassoc req - txBdToken %u"), pMac->lim.txBdToken);
+        halstatus = halTxFrameWithTxComplete( pMac, pPacket,
+                ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
+                HAL_TXRX_FRM_802_11_MGMT, ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, limTxBdComplete,
+                txFlag, pMac->lim.txBdToken );
+        pMac->lim.txBdToken++;
+    }
+    else
+    {
+        halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) (sizeof(tSirMacMgmtHdr) + nPayload),
+                HAL_TXRX_FRM_802_11_MGMT,
+                ANI_TXDIR_TODS,
+                7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                limTxComplete, pFrame, txFlag );
+    }
     MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
            psessionEntry->peSessionId,
            halstatus));
@@ -3411,12 +3614,52 @@ limSendReassocReqMgmtFrame(tpAniSirGlobal     pMac,
         goto end;
     }
 
+    // enable caching
+    WLANTL_EnableCaching(psessionEntry->staId);
+
 end:
     // Free up buffer allocated for mlmAssocReq
     vos_mem_free( pMlmReassocReq );
     psessionEntry->pLimMlmReassocReq = NULL;
 
 } // limSendReassocReqMgmtFrame
+
+eHalStatus limAuthTxCompleteCnf(tpAniSirGlobal pMac, void *pData)
+{
+    tANI_U32 txCompleteSuccess;
+    tpSirTxBdStatus pTxBdStatus;
+
+    if (!pData)
+    {
+        limLog(pMac, LOG1,
+                FL(" pData is NULL"));
+        return eHAL_STATUS_FAILURE;
+    }
+
+    if (IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        pTxBdStatus = (tpSirTxBdStatus) pData;
+        txCompleteSuccess = pTxBdStatus->txCompleteStatus;
+        limLog(pMac, LOG1, FL("txCompleteStatus %u, txBdToken %u"),
+                pTxBdStatus->txCompleteStatus, pTxBdStatus->txBdToken);
+    }
+    else
+    {
+        txCompleteSuccess = *((tANI_U32*) pData);
+        limLog(pMac, LOG1,
+                FL("txCompleteSuccess= %d"), txCompleteSuccess);
+    }
+
+    if(txCompleteSuccess)
+    {
+       pMac->authAckStatus = LIM_AUTH_ACK_RCD_SUCCESS;
+       // 'Change' timer for future activations
+       limDeactivateAndChangeTimer(pMac, eLIM_AUTH_RETRY_TIMER);
+    }
+    else
+       pMac->authAckStatus = LIM_AUTH_ACK_RCD_FAILURE;
+    return eHAL_STATUS_SUCCESS;
+}
 
 /**
  * \brief Send an Authentication frame
@@ -3444,8 +3687,9 @@ void
 limSendAuthMgmtFrame(tpAniSirGlobal pMac,
                      tpSirMacAuthFrameBody pAuthFrameBody,
                      tSirMacAddr           peerMacAddr,
-                     tANI_U8               wepBit,
-                     tpPESession           psessionEntry 
+                     tANI_U8               wep_challenge_len,
+                     tpPESession           psessionEntry,
+                     tAniBool              waitForAck
                                                        )
 {
     tANI_U8            *pFrame, *pBody;
@@ -3468,7 +3712,7 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
            pAuthFrameBody->authStatusCode,
            (pAuthFrameBody->authStatusCode == eSIR_MAC_SUCCESS_STATUS),
             MAC_ADDR_ARRAY(peerMacAddr));
-    if (wepBit == LIM_WEP_IN_FC)
+    if (wep_challenge_len)
     {
         /// Auth frame3 to be sent with encrypted framebody
         /**
@@ -3478,10 +3722,8 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
          * 128 bytes for challenge text and 4 bytes each for
          * IV & ICV.
          */
-
-        frameLen = sizeof(tSirMacMgmtHdr) + LIM_ENCR_AUTH_BODY_LEN;
-
-        bodyLen = LIM_ENCR_AUTH_BODY_LEN;
+        bodyLen = wep_challenge_len + LIM_ENCR_AUTH_INFO_LEN;
+        frameLen = sizeof(tSirMacMgmtHdr) + bodyLen;
     } // if (wepBit == LIM_WEP_IN_FC)
     else
     {
@@ -3546,9 +3788,11 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
                      * for challenge text.
                      */
 
+                    bodyLen  = SIR_MAC_AUTH_FRAME_INFO_LEN +
+                               SIR_MAC_SAP_AUTH_CHALLENGE_LENGTH +
+                               SIR_MAC_CHALLENGE_ID_LEN;
                     frameLen = sizeof(tSirMacMgmtHdr) +
-                               sizeof(tSirMacAuthFrame);
-                    bodyLen  = sizeof(tSirMacAuthFrameBody);
+                               bodyLen;
                 }
 
                 break;
@@ -3609,7 +3853,10 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
     }
 
     pMacHdr = ( tpSirMacMgmtHdr ) pFrame;
-    pMacHdr->fc.wep = wepBit;
+    if (wep_challenge_len)
+        pMacHdr->fc.wep = LIM_WEP_IN_FC;
+    else
+        pMacHdr->fc.wep = LIM_NO_WEP_IN_FC;
 
     // Prepare BSSId
     if(  (psessionEntry->limSystemRole == eLIM_AP_ROLE)|| (psessionEntry->limSystemRole == eLIM_BT_AMP_AP_ROLE) )
@@ -3622,15 +3869,15 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
     /// Prepare Authentication frame body
     pBody    = pFrame + sizeof(tSirMacMgmtHdr);
 
-    if (wepBit == LIM_WEP_IN_FC)
+    if (wep_challenge_len)
     {
         vos_mem_copy(pBody, (tANI_U8 *) pAuthFrameBody, bodyLen);
 
-        PELOG1(limLog(pMac, LOG1,
+        limLog(pMac, LOG1,
            FL("*** Sending Auth seq# 3 status %d (%d) to"MAC_ADDRESS_STR),
            pAuthFrameBody->authStatusCode,
            (pAuthFrameBody->authStatusCode == eSIR_MAC_SUCCESS_STATUS),
-           MAC_ADDR_ARRAY(pMacHdr->da));)
+           MAC_ADDR_ARRAY(pMacHdr->da));
 
     }
     else
@@ -3689,12 +3936,12 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
         }
 #endif
 
-        PELOG1(limLog(pMac, LOG1,
+        limLog(pMac, LOG1,
            FL("*** Sending Auth seq# %d status %d (%d) to "MAC_ADDRESS_STR),
            pAuthFrameBody->authTransactionSeqNumber,
            pAuthFrameBody->authStatusCode,
            (pAuthFrameBody->authStatusCode == eSIR_MAC_SUCCESS_STATUS),
-           MAC_ADDR_ARRAY(pMacHdr->da));)
+           MAC_ADDR_ARRAY(pMacHdr->da));
     }
     PELOG2(sirDumpBuf(pMac, SIR_LIM_MODULE_ID, LOG2, pFrame, frameLen);)
 
@@ -3716,8 +3963,9 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
         txFlag |= HAL_USE_PEER_STA_REQUESTED_MASK;
     }
 
-    limLog( pMac, LOG1, FL("Sending Auth Frame over WQ5 to "MAC_ADDRESS_STR
-                   " From " MAC_ADDRESS_STR),MAC_ADDR_ARRAY(pMacHdr->da),
+    limLog( pMac, LOG1,
+         FL("Sending Auth Frame over WQ5 with waitForAck %d to "MAC_ADDRESS_STR
+            " From " MAC_ADDRESS_STR), waitForAck, MAC_ADDR_ARRAY(pMacHdr->da),
               MAC_ADDR_ARRAY(psessionEntry->selfMacAddr));
 
     txFlag |= HAL_USE_FW_IN_TX_PATH;
@@ -3725,22 +3973,55 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
     MTRACE(macTrace(pMac, TRACE_CODE_TX_MGMT,
            psessionEntry->peSessionId,
            pMacHdr->fc.subType));
-    /// Queue Authentication frame in high priority WQ
-    halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) frameLen,
+
+    if( ( psessionEntry->is11Gonly == true ) &&
+                        ( !IS_BROADCAST_MAC(peerMacAddr) ) ){
+         txFlag |= HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME;
+    }
+    if(eSIR_TRUE == waitForAck)
+    {
+        pMac->authAckStatus = LIM_AUTH_ACK_NOT_RCD;
+        limLog(pMac, LOG1, FL("Auth frame - txBdToken %u"),
+                pMac->lim.txBdToken);
+        halstatus = halTxFrameWithTxComplete( pMac, pPacket,
+                    ( tANI_U16 ) frameLen,
+                    HAL_TXRX_FRM_802_11_MGMT,
+                    ANI_TXDIR_TODS,
+                    7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
+                    limTxComplete, pFrame, limAuthTxCompleteCnf, txFlag,
+                    pMac->lim.txBdToken);
+        pMac->lim.txBdToken++;
+        MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
+               psessionEntry->peSessionId,
+               halstatus));
+        if (!HAL_STATUS_SUCCESS(halstatus))
+        {
+            limLog( pMac, LOGE,
+             FL("Could not send Auth frame, retCode=%X "),
+                    halstatus );
+            pMac->authAckStatus = LIM_AUTH_ACK_RCD_FAILURE;
+            //Pkt will be freed up by the callback
+        }
+    }
+    else
+    {
+      /// Queue Authentication frame in high priority WQ
+      halstatus = halTxFrame( pMac, pPacket, ( tANI_U16 ) frameLen,
                             HAL_TXRX_FRM_802_11_MGMT,
                             ANI_TXDIR_TODS,
                             7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
                             limTxComplete, pFrame, txFlag );
-    MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
+      MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
            psessionEntry->peSessionId,
            halstatus));
-    if ( ! HAL_STATUS_SUCCESS ( halstatus ) )
-    {
+      if ( ! HAL_STATUS_SUCCESS ( halstatus ) )
+      {
         limLog(pMac, LOGE,
                FL("*** Could not send Auth frame, retCode=%X ***"),
                halstatus);
 
         //Pkt will be freed up by the callback
+      }
     }
 
     return;
@@ -3859,6 +4140,8 @@ eHalStatus limSendDisassocCnf(tpAniSirGlobal pMac)
         pStaDs = dphLookupHashEntry(pMac, pMlmDisassocReq->peerMacAddr, &aid, &psessionEntry->dph.dphHashTable);
         if (pStaDs == NULL)
         {
+            limLog(pMac, LOGE,
+                   FL("StaDs Null"));
             mlmDisassocCnf.resultCode = eSIR_SME_INVALID_PARAMETERS;
             goto end;
         }
@@ -3867,6 +4150,8 @@ eHalStatus limSendDisassocCnf(tpAniSirGlobal pMac)
         if(eSIR_SUCCESS != limCleanupRxPath(pMac, pStaDs, psessionEntry))
         {
             mlmDisassocCnf.resultCode = eSIR_SME_RESOURCES_UNAVAILABLE;
+            limLog(pMac, LOGE,
+                   FL("CleanupRxPath error"));
             goto end;
         }
 
@@ -3929,13 +4214,27 @@ end:
     return eHAL_STATUS_SUCCESS;
 }
 
-eHalStatus limDisassocTxCompleteCnf(tpAniSirGlobal pMac, tANI_U32 txCompleteSuccess)
+eHalStatus limDisassocTxCompleteCnf(tpAniSirGlobal pMac, void *pData)
 {
+    if (pData && IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        tpSirTxBdStatus pTxBdStatus;
+        pTxBdStatus = (tpSirTxBdStatus) pData;
+        limLog(pMac, LOG1, FL("txCompleteStatus %u, txBdToken %u"),
+                pTxBdStatus->txCompleteStatus, pTxBdStatus->txBdToken);
+    }
     return limSendDisassocCnf(pMac);
 }
 
-eHalStatus limDeauthTxCompleteCnf(tpAniSirGlobal pMac, tANI_U32 txCompleteSuccess)
+eHalStatus limDeauthTxCompleteCnf(tpAniSirGlobal pMac, void *pData)
 {
+    if (pData && IS_FEATURE_SUPPORTED_BY_FW(ENHANCED_TXBD_COMPLETION))
+    {
+        tpSirTxBdStatus pTxBdStatus;
+        pTxBdStatus = (tpSirTxBdStatus) pData;
+        limLog(pMac, LOG1, FL("txCompleteStatus %u, txBdToken %u"),
+                pTxBdStatus->txCompleteStatus, pTxBdStatus->txBdToken);
+    }
     return limSendDeauthCnf(pMac);
 }
 
@@ -4091,7 +4390,8 @@ limSendDisassocMgmtFrame(tpAniSirGlobal pMac,
                 ANI_TXDIR_TODS,
                 7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
                 limTxComplete, pFrame, limDisassocTxCompleteCnf,
-                txFlag );
+                txFlag,
+                pMac->lim.txBdToken++);
         MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
                psessionEntry->peSessionId,
                halstatus));
@@ -4296,7 +4596,8 @@ limSendDeauthMgmtFrame(tpAniSirGlobal pMac,
                 HAL_TXRX_FRM_802_11_MGMT,
                 ANI_TXDIR_TODS,
                 7,//SMAC_SWBD_TX_TID_MGMT_HIGH,
-                limTxComplete, pFrame, limDeauthTxCompleteCnf, txFlag );
+                limTxComplete, pFrame, limDeauthTxCompleteCnf, txFlag,
+                pMac->lim.txBdToken++);
         MTRACE(macTrace(pMac, TRACE_CODE_TX_COMPLETE,
                psessionEntry->peSessionId,
                halstatus));
