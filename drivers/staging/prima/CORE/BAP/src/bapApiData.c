@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015, 2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -42,9 +42,6 @@
   Are listed for each API below. 
   
   
-  Copyright (c) 2008 QUALCOMM Incorporated.
-  All Rights Reserved.
-  Qualcomm Confidential and Proprietary
 ===========================================================================*/
 
 /*===========================================================================
@@ -403,6 +400,7 @@ WLANBAP_XlateTxDataPkt
     // Now copy the AC values from the Logical Link context
     *pucAC = pLogLinkContext->btampAC;
     // Now copy the values from the Logical Link context to the MetaInfo 
+    tlMetaInfo->ac = *pucAC;
     tlMetaInfo->ucTID = pLogLinkContext->ucTID;
     tlMetaInfo->ucUP = pLogLinkContext->ucUP;
     tlMetaInfo->ucIsEapol = VOS_FALSE;
@@ -1015,7 +1013,7 @@ WLANBAP_TxCompCB
 #ifdef BAP_DEBUG
     /* Trace the bapContext referenced. */
     VOS_TRACE( VOS_MODULE_ID_BAP, VOS_TRACE_LEVEL_INFO_HIGH,
-              "WLAN BAP Context Monitor: bapContext value = %p in %s:%d. vosDataBuff=%p", bapContext, __func__, __LINE__, vosDataBuff );
+              "WLAN BAP Context Monitor: bapContext value = %pK in %s:%d. vosDataBuff=%pK", bapContext, __func__, __LINE__, vosDataBuff );
 #endif //BAP_DEBUG
 
     // Sanity check the log_link_handle value 
@@ -1166,7 +1164,7 @@ WLANBAP_STAPktPending
 #ifdef BAP_DEBUG
     /* Trace the tBtampCtx being passed in. */
     VOS_TRACE( VOS_MODULE_ID_BAP, VOS_TRACE_LEVEL_INFO_HIGH,
-              "WLAN BAP Context Monitor: pBtampCtx value = %p in %s:%d", pBtampCtx, __func__, __LINE__ );
+              "WLAN BAP Context Monitor: pBtampCtx value = %pK in %s:%d", pBtampCtx, __func__, __LINE__ );
 #endif //BAP_DEBUG
 
     /*------------------------------------------------------------------------

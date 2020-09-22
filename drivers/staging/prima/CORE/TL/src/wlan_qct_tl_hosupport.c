@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, 2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -36,9 +36,6 @@
   Are listed for each API below. 
   
   
-  Copyright (c) 2008 QUALCOMM Incorporated.
-  All Rights Reserved.
-  Qualcomm Confidential and Proprietary
 ===========================================================================*/
 
 /*===========================================================================
@@ -360,14 +357,14 @@ void WLANTL_HSDebugDisplay
          {
             if(VOS_MODULE_ID_HDD == hoSupport->registeredInd[idx].whoIsClient[sIdx])
             {
-               TLLOG1(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Client HDD pCB %p, triggerEvt %d, RSSI %d",
+               TLLOG1(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Client HDD pCB %pK, triggerEvt %d, RSSI %d",
                    hoSupport->registeredInd[idx].crossCBFunction[sIdx],
                              hoSupport->registeredInd[idx].triggerEvent[sIdx],
                              hoSupport->registeredInd[idx].rssiValue));
             }
             else
             {
-               TLLOG1(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Client SME pCB %p, triggerEvt %d, RSSI %d",
+               TLLOG1(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Client SME pCB %pK, triggerEvt %d, RSSI %d",
                              hoSupport->registeredInd[idx].crossCBFunction[sIdx],
                              hoSupport->registeredInd[idx].triggerEvent[sIdx],
                              hoSupport->registeredInd[idx].rssiValue));
@@ -380,12 +377,12 @@ void WLANTL_HSDebugDisplay
    {
       if(VOS_TRUE == tlCtxt->isBMPS)
       {
-         TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_ERROR," ----> CRegion %d, hRSSI:NA, BMPS, Alpha %d",
+         TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO," ----> CRegion %d, hRSSI:NA, BMPS, Alpha %d",
                       currentHO->regionNumber, currentHO->alpha));
       }
       else
       {
-         TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_ERROR," ----> CRegion %d, hRSSI %d, Alpha %d",
+         TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO," ----> CRegion %d, hRSSI %d, Alpha %d",
                       currentHO->regionNumber,
                       currentHO->historyRSSI,
                       currentHO->alpha));
@@ -851,7 +848,7 @@ VOS_STATUS WLANTL_HSGetRSSI
    currentHO = &tlCtxt->hoSupport.currentHOState;
 
    currentRSSI0 = WLANTL_GETRSSI0(pBDHeader);
-   currentRSSI1 = WLANTL_GETRSSI0(pBDHeader);
+   currentRSSI1 = WLANTL_GETRSSI1(pBDHeader);
    currentRSSI  = (currentRSSI0 > currentRSSI1) ? currentRSSI0 : currentRSSI1;
 
    if (0 == currentRSSI)
@@ -1511,12 +1508,12 @@ VOS_STATUS WLANTL_HSRegRSSIIndicationCB
          {
             for(sIdx = 0; sIdx < WLANTL_HS_NUM_CLIENT; sIdx++)
             {
-               TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Reg CB P %p, registered CB P %p",
+               TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Reg CB P %pK, registered CB P %pK",
                              crossCBFunction,
                              hoSupport->registeredInd[idx].crossCBFunction[sIdx]));
                if(crossCBFunction == hoSupport->registeredInd[idx].crossCBFunction[sIdx])
                {
-                  TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Same RSSI %d, Same CB %p already registered",
+                  TLLOGE(VOS_TRACE(VOS_MODULE_ID_TL, VOS_TRACE_LEVEL_INFO,"Same RSSI %d, Same CB %pK already registered",
                                rssiValue, crossCBFunction));
                   WLANTL_HSDebugDisplay(pAdapter);
                   THSRELEASELOCK("WLANTL_HSRegRSSIIndicationCB", &tlCtxt->hoSupport.hosLock);

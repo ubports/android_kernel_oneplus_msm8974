@@ -29,6 +29,7 @@ enum wcnss_hw_type {
 struct wcnss_wlan_config {
 	int		use_48mhz_xo;
 	int	is_pronto_v3;
+	int	iris_id; 
 };
 
 enum {
@@ -70,6 +71,7 @@ int wcnss_req_power_on_lock(char *driver_name);
 int wcnss_free_power_on_lock(char *driver_name);
 unsigned int wcnss_get_serial_number(void);
 void wcnss_flush_delayed_boot_votes(void);
+int wcnss_get_iris_name(char *iris_version);
 int wcnss_get_wlan_mac_address(char mac_addr[WLAN_MAC_ADDR_SIZE]);
 void wcnss_allow_suspend(void);
 void wcnss_prevent_suspend(void);
@@ -77,6 +79,7 @@ int wcnss_hardware_type(void);
 void *wcnss_prealloc_get(unsigned int size);
 int wcnss_prealloc_put(void *ptr);
 void wcnss_reset_intr(void);
+void wcnss_reset_fiq(bool clk_chk_en);
 void wcnss_suspend_notify(void);
 void wcnss_resume_notify(void);
 void wcnss_riva_log_debug_regs(void);
@@ -89,6 +92,7 @@ void wcnss_riva_dump_pmic_regs(void);
 int wcnss_xo_auto_detect_enabled(void);
 u32 wcnss_get_wlan_rx_buff_count(void);
 int wcnss_wlan_iris_xo_mode(void);
+void wcnss_dump_stack(struct task_struct *task);
 #ifdef CONFIG_WCNSS_REGISTER_DUMP_ON_BITE
 void wcnss_log_debug_regs_on_bite(void);
 #else

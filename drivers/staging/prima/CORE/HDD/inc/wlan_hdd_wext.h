@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -176,7 +176,7 @@ typedef enum
 #define IE_VENDOR_OUI_SIZE   4
 
 /** Maximum Length of WPA/RSN IE */
-#define MAX_WPA_RSN_IE_LEN 40
+#define MAX_WPA_RSN_IE_LEN 255
 
 /** Maximum Number of WEP KEYS */
 #define MAX_WEP_KEYS 4
@@ -274,6 +274,13 @@ typedef enum
     WEXT_SCAN_PENDING_MAX
 } hdd_scan_pending_option_e;
 
+enum
+{
+   WLAN_HDD_GET_FRAME_LOG_CMD_CLEAR          = 1<<0,
+   WLAN_HDD_GET_FRAME_LOG_CMD_SEND_AND_CLEAR = 1<<1,
+   WLAN_HDD_GET_FRAME_LOG_CMD_BMU_TRACING    = 1<<2,
+};
+
 /* 
  * This structure contains the interface level (granularity) 
  * configuration information in support of wireless extensions. 
@@ -335,6 +342,11 @@ typedef struct ccp_freq_chan_map_s{
     v_U32_t freq;
     v_U32_t chan;
 }hdd_freq_chan_map_t;
+
+struct stats_class_a_ctx {
+    tCsrGlobalClassAStatsInfo class_a_stats;
+};
+
 
 #define wlan_hdd_get_wps_ie_ptr(ie, ie_len) \
     wlan_hdd_get_vendor_oui_ie_ptr(WPS_OUI_TYPE, WPS_OUI_TYPE_SIZE, ie, ie_len)
@@ -414,7 +426,7 @@ extern int hdd_priv_get_data(struct iw_point *p_priv_data,
 extern void *mem_alloc_copy_from_user_helper(const void *wrqu_data, size_t len);
 
 void hdd_clearRoamProfileIe( hdd_adapter_t *pAdapter);
-void hdd_GetClassA_statisticsCB(void *pStats, void *pContext);
+void hdd_get_class_a_statistics_cb(void *stats, void *context);
 
 VOS_STATUS wlan_hdd_check_ula_done(hdd_adapter_t *pAdapter);
 
@@ -455,6 +467,6 @@ void* wlan_hdd_change_country_code_callback(void *pAdapter);
 
 int hdd_setBand(struct net_device *dev, u8 ui_band);
 int hdd_setBand_helper(struct net_device *dev, const char *command);
-
+VOS_STATUS wlan_hdd_get_frame_logs(hdd_adapter_t *pAdapter, v_U8_t flag);
 #endif // __WEXT_IW_H__
 

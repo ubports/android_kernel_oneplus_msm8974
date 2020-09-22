@@ -35,9 +35,6 @@
   
   \brief prototype for SME QoS APIs
   
-   Copyright 2008 (c) Qualcomm, Incorporated.  All Rights Reserved.
-   
-   Qualcomm Confidential and Proprietary.
   
   ========================================================================*/
 
@@ -60,6 +57,7 @@
 #define SME_QOS_UAPSD_VI      0x02
 #define SME_QOS_UAPSD_BE      0x08
 #define SME_QOS_UAPSD_BK      0x04
+#define WLAN_MAX_DSCP 0x3f
 
 /*-------------------------------------------------------------------------- 
   Type declarations
