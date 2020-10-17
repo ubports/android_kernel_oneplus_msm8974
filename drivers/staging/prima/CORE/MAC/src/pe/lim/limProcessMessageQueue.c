@@ -1291,7 +1291,7 @@ limProcessMessages(tpAniSirGlobal pMac, tpSirMsgQ  limMsg)
         limMsg->bodyptr = NULL;
         return;
     }
-#ifdef WLAN_DEBUG    
+#ifdef WLAN_DEBUG
     pMac->lim.numTot++;
 #endif
 
@@ -1305,12 +1305,13 @@ limProcessMessages(tpAniSirGlobal pMac, tpSirMsgQ  limMsg)
     * SME enums (eWNI_SME_START_REQ) starts with 0x16xx.
     * Compare received SME events with SIR_SME_MODULE_ID
     */
-
+#ifdef TRACE_RECORD
     if (SIR_SME_MODULE_ID == (tANI_U8)MAC_TRACE_GET_MODULE_ID(limMsg->type))
     {
        MTRACE(macTrace(pMac, TRACE_CODE_RX_SME_MSG, NO_SESSION, limMsg->type));
     }
     else
+#endif
     {
        /* Omitting below message types as these are too frequent and when crash
         * happens we loose critical trace logs if these are also logged

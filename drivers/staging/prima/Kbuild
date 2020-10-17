@@ -56,7 +56,7 @@ CONFIG_QCOM_ESE_UPLOAD := n
 BUILD_DEBUG_VERSION := 1
 
 #Enable this flag to build driver in diag version
-BUILD_DIAG_VERSION := 1
+BUILD_DIAG_VERSION := 0
 
 #Do we panic on bug?  default is to warn
 PANIC_ON_BUG := 1
@@ -134,6 +134,7 @@ HDD_OBJS := 	$(HDD_SRC_DIR)/bap_hdd_main.o \
 		$(HDD_SRC_DIR)/wlan_hdd_main.o \
 		$(HDD_SRC_DIR)/wlan_hdd_mib.o \
 		$(HDD_SRC_DIR)/wlan_hdd_oemdata.o \
+		$(HDD_SRC_DIR)/wlan_hdd_request_manager.o \
 		$(HDD_SRC_DIR)/wlan_hdd_scan.o \
 		$(HDD_SRC_DIR)/wlan_hdd_softap_tx_rx.o \
 		$(HDD_SRC_DIR)/wlan_hdd_tx_rx.o \
@@ -552,6 +553,7 @@ CDEFINES :=	-DANI_BUS_TYPE_PLATFORM=1 \
 		-DFEATURE_WLAN_LPHB \
                 -DFEATURE_WLAN_PAL_TIMER_DISABLE \
                 -DFEATURE_WLAN_PAL_MEM_DISABLE \
+                -DFEATURE_WLAN_CH144 \
                 -DWLAN_BUG_ON_SKB_ERROR \
                 -DWLAN_DXE_LOW_RESOURCE_TIMER \
                 -DWLAN_LOGGING_SOCK_SVC_ENABLE \
@@ -664,7 +666,7 @@ CDEFINES += -DEXISTS_MSM_SMSM
 endif
 
 # Fix build for GCC 4.7
-EXTRA_CFLAGS += -Wno-unused-function
+EXTRA_CFLAGS += -Wno-maybe-uninitialized -Wno-unused-function
 
 KBUILD_CPPFLAGS += $(CDEFINES)
 
